@@ -76,6 +76,11 @@ ContextPlan
 └── versions
 ```
 
+Implemented in `src/forge/domain/context.py` and `src/forge/inference/context.py`.
+Stable blocks are ordered by sharing scope (tools, platform, agent, mission) and
+the transcript is append-only; when over budget, the oldest tool results are
+elided first and the latest turn never is (`docs/decisions/0004`).
+
 ---
 
 # 6. TOOL CONTEXT
@@ -118,6 +123,10 @@ RAG content must be clearly separated from instructions.
 FORGE must use provider-native caching.
 
 The cache planner should maximize reuse of stable prefixes.
+
+Explicit-caching providers get breakpoints after each sharing scope and on the
+last message, only where the prefix meets the model's minimum cacheable size.
+Automatic-caching providers get a stable cache-affinity key instead.
 
 Track:
 
@@ -174,6 +183,10 @@ Sensitive context must not automatically enter:
 - long-term memory
 - evaluation datasets
 - cached context
+
+No cache breakpoint is placed at or after a sensitive block. Providers that cache
+automatically cannot be prevented from caching; sensitive work that must not be
+cached belongs on a provider without automatic caching (`docs/decisions/0004`).
 
 ---
 

@@ -8,7 +8,7 @@ from forge.domain.model import ToolResultBlock
 from forge.domain.task import TaskStatus
 from forge.domain.tool import InvocationStatus, idempotency_key
 from forge.inference.demo import DemoInvestigationModel
-from forge.inference.pricing import DEMO_MODEL, PRICES
+from forge.inference.profiles import DEMO_MODEL, PROFILES
 from forge.infrastructure.clock import SystemClock
 from forge.orchestration.agents import register_agent
 from forge.orchestration.missions import MissionRequest, submit_mission
@@ -77,6 +77,7 @@ async def test_mission_agent_model_tool_model_result(uow: UowFactory) -> None:
         "task.started",
         "mission.started",
         "agent.started",
+        "model.routed",
         "checkpoint.created",
         "model.called",
         "checkpoint.created",
@@ -121,7 +122,7 @@ async def test_demo_composition_answers_the_checkout_question(uow: UowFactory) -
         uow_factory=uow,
         clock=clock,
         models={DEMO_MODEL.provider: DemoInvestigationModel()},
-        prices=PRICES,
+        profiles=PROFILES,
         tools={"metrics.read": metrics},
         worker_id="demo",
         lease_seconds=30,

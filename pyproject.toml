@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.0",
+    "anthropic>=1.12.0",
     "fastapi>=0.142.2",
+    "openai>=3.26.0",
     "opentelemetry-api>=1.45.1",
     "opentelemetry-exporter-otlp-proto-http>=1.45.1",
     "opentelemetry-sdk>=1.45.1",
@@ -61,10 +63,11 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "-m", "not integration and not e2e"]
+addopts = ["-ra", "--strict-markers", "-m", "not integration and not e2e and not live"]
 markers = [
     "integration: requires running PostgreSQL and Redis (see `make test-integration`)",
     "e2e: drives the running Docker Compose stack (see `make e2e`)",
+    "live: calls real model providers; needs credentials and costs money (see `make test-live`)",
 ]
 filterwarnings = ["error"]
 

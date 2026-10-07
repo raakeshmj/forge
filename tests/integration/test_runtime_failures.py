@@ -103,14 +103,18 @@ async def test_model_timeouts_are_retried_then_fail(uow: UowFactory) -> None:
     assert final.cost_micro_usd == 0
 
 
-async def test_model_without_a_price_is_never_called(uow: UowFactory) -> None:
+async def test_model_without_a_profile_is_never_called(uow: UowFactory) -> None:
     model = ScriptedModel(answer())
-    await submit(uow)
+    mission_id = await submit(uow)
 
-    final = await run_next(replace(runtime(uow, model, RecordingTool()), prices={}))
+    assert await claim_next(replace(runtime(uow, model, RecordingTool()), profiles={})) is None
 
-    assert final.failure_kind is FailureKind.MODEL_FAILED
     assert model.requests == []
+    async with uow() as tx:
+        (execution,) = await tx.executions.list_for_mission(mission_id)
+        mission = await tx.missions.get(mission_id)
+    assert execution.failure_kind is FailureKind.NO_ELIGIBLE_MODEL
+    assert mission.status is MissionStatus.FAILED
 
 
 # --- Tool retries and timeouts -----------------------------------------------------------

@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-1 are implemented: a durable single-agent runtime that survives worker crashes. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-2 are implemented: a durable single-agent runtime with provider-aware inference, explicit context planning, and provider-native prompt caching. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -38,8 +38,11 @@ curl -s localhost:18000/missions/$mission/events | jq   # the immutable event hi
 curl -s -X POST localhost:18000/missions/$mission/cancel
 ```
 
-Phase 1 ships a deterministic demo model and a simulated read-only `metrics.read`
-tool; real provider adapters arrive in Phase 2.
+The `demo` provider is a deterministic local model that simulates prefix caching.
+Agents can name Anthropic or OpenAI models (with `fallback_models`); the worker
+enables a provider only when its credentials (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`) are present, and routes around providers that are not.
+`make test-live` exercises real prompt caching when credentials are set.
 
 ## Local services
 

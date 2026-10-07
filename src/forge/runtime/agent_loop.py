@@ -9,13 +9,15 @@ checkpoint, so committed work is never repeated.
 
 import asyncio
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from uuid import uuid4
 
 from forge.domain.agent import AgentVersion, ModelRef
 from forge.domain.checkpoint import STATE_VERSION, AgentState, Checkpoint
-from forge.domain.cost import ModelPrice, Usage
+from forge.domain.context import ContextPlan
+from forge.domain.cost import Usage
 from forge.domain.events import (
     AgentCancelled,
     AgentCompleted,
@@ -25,6 +27,7 @@ from forge.domain.events import (
     DomainEvent,
     ModelCalled,
     ModelFailed,
+    ModelRouted,
     ToolCalled,
     ToolCompleted,
     ToolDenied,
@@ -42,6 +45,17 @@ from forge.domain.tool import (
     idempotency_key,
 )
 from forge.inference.client import ModelCallError, ModelClient
+from forge.inference.context import (
+    ContextExceededError,
+    PlanningInputs,
+    build_request,
+    plan_cache,
+    plan_context,
+    stable_blocks,
+)
+from forge.inference.profiles import ModelProfile
+from forge.inference.router import RoutingDecision, route
+from forge.inference.tokens import estimate_messages
 from forge.observability import tracing
 from forge.observability.logs import correlation_id
 from forge.orchestration import missions
@@ -58,7 +72,7 @@ class Runtime:
     uow_factory: UnitOfWorkFactory
     clock: Clock
     models: Mapping[str, ModelClient]  # by provider
-    prices: Mapping[ModelRef, ModelPrice]
+    profiles: Mapping[ModelRef, ModelProfile]
     tools: Mapping[str, Tool]
     worker_id: str
     lease_seconds: float
@@ -88,13 +102,16 @@ async def claim_next(runtime: Runtime) -> Claim | None:
         if task is None:
             return None
         version = await uow.agents.get_current_version(task.agent_id)
+        mission = await uow.missions.get(task.mission_id)
+        initial = AgentState.initial(task.objective)
+        decision, required_tokens = _route(runtime, version, task, mission, initial)
         execution = Execution(
             id=uuid4(),
             mission_id=task.mission_id,
             task_id=task.id,
             agent_id=task.agent_id,
             agent_version_id=version.id,
-            model=version.model,
+            model=decision.selected or version.model,
             status=ExecutionStatus.RUNNING,
             attempt=1,
             usage=Usage(),
@@ -109,13 +126,56 @@ async def claim_next(runtime: Runtime) -> Claim | None:
             execution, worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
         )
         await missions.start_task(uow, task, execution.id, now)
-        mission = await uow.missions.get(task.mission_id)
         await _append(uow, mission, _started(execution, runtime.worker_id))
-        await uow.checkpoints.add(
-            Checkpoint(execution.id, 1, AgentState.initial(task.objective), STATE_VERSION, now)
-        )
+        await _append(uow, mission, _routed(execution, decision, required_tokens))
+        await uow.checkpoints.add(Checkpoint(execution.id, 1, initial, STATE_VERSION, now))
         await _append(uow, mission, _checkpointed(execution, 1))
+        if decision.selected is None:
+            # Nothing can serve this execution: finish it now rather than hand it to a runner.
+            failed = execution.fail(FailureKind.NO_ELIGIBLE_MODEL, decision.explanation, now)
+            await uow.executions.update(failed, fence=fence, lease_seconds=0)
+            await _append(uow, mission, _terminal(failed, None))
+            mission = await missions.lock_mission(uow, mission.id)
+            await missions.finish_task(uow, mission, failed, now)
+            _log.warning(
+                "no eligible model", extra={"execution_id": str(execution.id), "retryable": False}
+            )
+            return None
     return Claim(execution, fence)
+
+
+def exposed_tools(
+    runtime: Runtime, version: AgentVersion, task: Task, mission: Mission
+) -> tuple[ToolDefinition, ...]:
+    """Offer the model only tools a call could be authorized for; the pipeline still checks."""
+    return tuple(
+        runtime.tools[name].definition
+        for name in sorted(runtime.tools)
+        if pipeline.authorize(
+            name, tools=runtime.tools, version=version, task=task, mission=mission
+        ).allowed
+    )
+
+
+def _route(
+    runtime: Runtime, version: AgentVersion, task: Task, mission: Mission, state: AgentState
+) -> tuple[RoutingDecision, int]:
+    """Choose the execution's model once, before any context is built (ARCHITECTURE §10)."""
+    tools = exposed_tools(runtime, version, task, mission)
+    inputs = PlanningInputs(version, mission, tools, state.messages)
+    required = sum(b.token_estimate for b in stable_blocks(inputs)) + estimate_messages(
+        inputs.messages
+    )
+    decision = route(
+        version.model_candidates,
+        profiles=runtime.profiles,
+        available_providers=set(runtime.models),
+        required_context_tokens=required,
+        reserved_output_tokens=mission.execution_policy.max_output_tokens,
+        needs_tools=bool(tools),
+        remaining_budget_micro_usd=mission.budget.limit_micro_usd,
+    )
+    return decision, required
 
 
 class ExecutionRunner:
@@ -126,6 +186,7 @@ class ExecutionRunner:
     _state: AgentState
     _sequence: int
     _correlation_id: str
+    _plan: ContextPlan
 
     def __init__(self, runtime: Runtime, claim: Claim) -> None:
         self._rt = runtime
@@ -203,28 +264,43 @@ class ExecutionRunner:
 
     async def _model_step(self, mission: Mission) -> Execution | None:
         model = self._execution.model
-        client, price = self._rt.models.get(model.provider), self._rt.prices.get(model)
-        if client is None or price is None:
+        client, profile = self._rt.models.get(model.provider), self._rt.profiles.get(model)
+        if client is None or profile is None:
             return await self._fail(
-                FailureKind.MODEL_FAILED, f"no client or price configured for {model}"
+                FailureKind.MODEL_FAILED, f"no client or profile configured for {model}"
             )
         policy = mission.execution_policy
-        request = ModelRequest(
-            model=model,
-            system=self._version.instructions,
-            messages=self._state.messages,
-            tools=self._exposed_tools(mission),
-            max_output_tokens=policy.max_output_tokens,
+        inputs = PlanningInputs(
+            self._version,
+            mission,
+            exposed_tools(self._rt, self._version, self._task, mission),
+            self._state.messages,
         )
+        output_tokens = min(policy.max_output_tokens, profile.max_output_tokens)
+        try:
+            plan, messages = plan_context(
+                inputs, budget_tokens=profile.context_window_tokens - output_tokens
+            )
+        except ContextExceededError as exc:
+            return await self._fail(FailureKind.CONTEXT_EXCEEDED, str(exc))
+        plan, hints = plan_cache(plan, profile)
+        request = build_request(
+            plan, hints, messages, inputs=inputs, profile=profile, max_output_tokens=output_tokens
+        )
+        self._plan = plan
         turn = self._state.turns
         failures: list[DomainEvent] = []
         retry = policy.model_retry
         for attempt in range(1, retry.max_attempts + 1):
+            started = time.perf_counter()
             response, error = await self._call_model(
-                client, request, price, turn, attempt, policy.model_timeout_seconds
+                client, request, profile, turn, attempt, policy.model_timeout_seconds
             )
             if response is not None:
-                return await self._record_model_turn(response, price, turn, attempt, failures)
+                latency_ms = round((time.perf_counter() - started) * 1000)
+                return await self._record_model_turn(
+                    response, profile, turn, attempt, failures, latency_ms
+                )
             error_type, retryable = error
             failures.append(
                 ModelFailed(
@@ -257,7 +333,7 @@ class ExecutionRunner:
         self,
         client: ModelClient,
         request: ModelRequest,
-        price: ModelPrice,
+        profile: ModelProfile,
         turn: int,
         attempt: int,
         limit_seconds: float,
@@ -290,7 +366,7 @@ class ExecutionRunner:
                     "forge.output_tokens": usage.output_tokens,
                     "forge.cached_tokens": usage.cache_read_input_tokens,
                     "forge.cache_creation_tokens": usage.cache_creation_input_tokens,
-                    "forge.cost_micro_usd": price.cost_of(usage),
+                    "forge.cost_micro_usd": profile.price.cost_of(usage),
                     "forge.finish_reason": response.stop_reason,
                 }
             )
@@ -299,12 +375,21 @@ class ExecutionRunner:
     async def _record_model_turn(
         self,
         response: ModelResponse,
-        price: ModelPrice,
+        profile: ModelProfile,
         turn: int,
         attempts: int,
         failures: Sequence[DomainEvent],
+        latency_ms: int,
     ) -> Execution | None:
-        cost = price.cost_of(response.usage)
+        usage = response.usage
+        cost = profile.price.cost_of(usage)
+        uncached = Usage(
+            input_tokens=usage.input_tokens
+            + usage.cache_read_input_tokens
+            + usage.cache_creation_input_tokens,
+            output_tokens=usage.output_tokens,
+        )
+        plan = self._plan
         state = self._state.with_model_response(response)
         execution = self._execution.record_spend(response.usage, cost)
         called = ModelCalled(
@@ -317,22 +402,18 @@ class ExecutionRunner:
             stop_reason=response.stop_reason,
             usage=response.usage,
             cost_micro_usd=cost,
+            latency_ms=latency_ms,
+            cache_savings_micro_usd=profile.price.cost_of(uncached) - cost,
+            context_tokens=plan.total_tokens,
+            context_blocks=tuple(f"{b.key}@{b.version}" for b in plan.blocks),
+            elided=tuple(e.key for e in plan.elisions),
+            cache_breakpoints=plan.breakpoints,
         )
         if response.tool_uses:
             await self._commit(state, execution, [*failures, called])
             return None
         final = execution.complete(response.text, self._rt.clock.now())
         return await self._finish(final, [*failures, called], state=state)
-
-    def _exposed_tools(self, mission: Mission) -> tuple[ToolDefinition, ...]:
-        """Offer the model only tools a call could be authorized for; the pipeline still checks."""
-        return tuple(
-            self._rt.tools[name].definition
-            for name in sorted(self._rt.tools)
-            if pipeline.authorize(
-                name, tools=self._rt.tools, version=self._version, task=self._task, mission=mission
-            ).allowed
-        )
 
     def _require_awaiting_model(self) -> None:
         last = self._state.messages[-1]
@@ -589,6 +670,20 @@ def _started(execution: Execution, worker_id: str) -> AgentStarted:
         worker_id=worker_id,
         agent_id=execution.agent_id,
         agent_version_id=execution.agent_version_id,
+    )
+
+
+def _routed(execution: Execution, decision: RoutingDecision, required_tokens: int) -> ModelRouted:
+    return ModelRouted(
+        aggregate_id=execution.id,
+        mission_id=execution.mission_id,
+        selected=None
+        if decision.selected is None
+        else f"{decision.selected.provider}/{decision.selected.name}",
+        candidates=tuple(
+            f"{c.model.provider}/{c.model.name}: {c.reason}" for c in decision.candidates
+        ),
+        required_context_tokens=required_tokens,
     )
 
 

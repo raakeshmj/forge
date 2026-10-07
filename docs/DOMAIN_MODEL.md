@@ -141,8 +141,10 @@ Contains:
 
 A production execution references a specific Agent Version.
 
-Phase 1 versions carry role, instructions, model, and tool bindings; the other
-bindings are added by the phases that consume them.
+Versions carry role, instructions, tool bindings, a primary model with ordered
+fallback models, and provider-specific model options (which may not override
+FORGE-controlled request fields). Other bindings are added by the phases that
+consume them.
 
 ---
 
@@ -270,6 +272,10 @@ Fields:
 - latency characteristics
 - reasoning configuration
 - caching capabilities
+
+Implemented as `ModelProfile` (`src/forge/inference/profiles.py`): context window,
+maximum output, price, tool support, caching mode, minimum cacheable tokens, and
+quality tier. Reasoning configuration travels as agent version model options.
 
 ---
 

@@ -20,6 +20,8 @@ async def create_agent(body: AgentCreate, request: Request) -> AgentCreated:
         role=body.role,
         instructions=body.instructions,
         model=ModelRef(body.model.provider, body.model.name),
+        fallback_models=[ModelRef(m.provider, m.name) for m in body.fallback_models],
+        model_options=body.model_options,
         tools=body.tools,
         correlation_id=correlation_id.get(),
     )

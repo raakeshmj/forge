@@ -1,5 +1,6 @@
 """Tool definitions and results (docs/DOMAIN_MODEL.md §11)."""
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -8,6 +9,8 @@ from uuid import UUID
 from forge.domain.common import DomainError, JSONValue
 from forge.domain.retry import RetryPolicy
 from forge.domain.risk import RiskLevel
+
+_TOOL_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 
 
 class Idempotency(StrEnum):
@@ -36,8 +39,11 @@ class ToolDefinition:
     retry_max_backoff_seconds: float = 4.0
 
     def __post_init__(self) -> None:
-        if not self.name:
-            raise DomainError("tool name is required")
+        if not _TOOL_NAME.fullmatch(self.name) or "__" in self.name:
+            raise DomainError(
+                f"tool name {self.name!r} must be 1-64 of [a-z0-9_.-], start alphanumeric, "
+                "and not contain '__'"
+            )
         if self.timeout_seconds <= 0:
             raise DomainError("tool timeout must be positive")
         if self.max_attempts > 1 and not self.idempotency.safe_to_repeat:

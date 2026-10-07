@@ -103,6 +103,8 @@ A mission can survive a simulated worker interruption and resume.
 
 # PHASE 2 — INFERENCE AND CONTEXT
 
+Status: implemented. Decisions: `docs/decisions/0004`.
+
 ## Objective
 
 Create provider-aware inference infrastructure.

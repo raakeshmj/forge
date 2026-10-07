@@ -1,9 +1,10 @@
 """Agent registry: registers agents with their first immutable version."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import uuid4
 
 from forge.domain.agent import Agent, AgentVersion, ModelRef
+from forge.domain.common import JSONValue
 from forge.domain.events import AgentRegistered
 from forge.domain.repositories import Clock, UnitOfWorkFactory
 
@@ -18,6 +19,8 @@ async def register_agent(
     model: ModelRef,
     tools: Sequence[str],
     correlation_id: str | None,
+    fallback_models: Sequence[ModelRef] = (),
+    model_options: Mapping[str, JSONValue] | None = None,
 ) -> AgentVersion:
     now = clock.now()
     agent = Agent(id=uuid4(), name=name, current_version=1, created_at=now)
@@ -30,6 +33,8 @@ async def register_agent(
         model=model,
         tools=tuple(sorted(set(tools))),
         created_at=now,
+        fallback_models=tuple(fallback_models),
+        model_options=dict(model_options or {}),
     )
     async with uow_factory() as uow:
         await uow.agents.add(agent, version)

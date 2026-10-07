@@ -41,7 +41,19 @@ class ToolResultBlock:
     is_error: bool = False
 
 
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
+@dataclass(frozen=True, slots=True)
+class OpaqueBlock:
+    """Provider-specific content the domain does not model (e.g. Anthropic thinking blocks).
+
+    Kept verbatim in the transcript and replayed only to the provider that produced it.
+    """
+
+    provider: str
+    data: Mapping[str, JSONValue]
+
+
+type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | OpaqueBlock
+type ResponseBlock = TextBlock | ToolUseBlock | OpaqueBlock
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,17 +63,37 @@ class Message:
 
 
 @dataclass(frozen=True, slots=True)
+class SystemBlock:
+    """One block of system context. `cache_breakpoint` marks the end of a cacheable prefix."""
+
+    key: str
+    text: str
+    cache_breakpoint: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CacheHints:
+    """Provider-neutral caching intent produced by the cache planner (ADR 0004)."""
+
+    tools: bool = False  # breakpoint after the tool definitions
+    last_message: bool = False  # breakpoint on the final message (incremental transcript caching)
+    key: str | None = None  # cache-affinity key for automatic-caching providers
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRequest:
     model: ModelRef
-    system: str
+    system: tuple[SystemBlock, ...]
     messages: tuple[Message, ...]
     tools: tuple[ToolDefinition, ...]
     max_output_tokens: int
+    cache: CacheHints = CacheHints()
+    provider_options: Mapping[str, JSONValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class ModelResponse:
-    content: tuple[TextBlock | ToolUseBlock, ...]
+    content: tuple[ResponseBlock, ...]
     stop_reason: str
     usage: Usage
     provider_metadata: Mapping[str, JSONValue] = field(default_factory=dict)
@@ -88,6 +120,8 @@ def block_to_json(block: ContentBlock) -> JSONObject:
                 "content": content,
                 "is_error": is_error,
             }
+        case OpaqueBlock(provider=provider, data=data):
+            return {"type": "opaque", "provider": provider, "data": dict(data)}
 
 
 def block_from_json(data: JSONObject) -> ContentBlock:
@@ -103,6 +137,8 @@ def block_from_json(data: JSONObject) -> ContentBlock:
             "is_error": bool(is_error),
         }:
             return ToolResultBlock(tool_use_id, content, is_error)
+        case {"type": "opaque", "provider": str(provider), "data": dict(data)}:
+            return OpaqueBlock(provider, data)
     raise DomainError(f"unrecognised content block: {data.get('type')!r}")
 
 

@@ -50,6 +50,8 @@ agent_versions = Table(
     Column("model_name", Text, nullable=False),
     Column("tools", JSONB, nullable=False),
     _ts("created_at"),
+    Column("fallback_models", JSONB, nullable=False),
+    Column("model_options", JSONB, nullable=False),
 )
 
 missions = Table(

@@ -111,6 +111,8 @@ class _Agents(_Repository):
                 model_name=version.model.name,
                 tools=list(version.tools),
                 created_at=version.created_at,
+                fallback_models=[[m.provider, m.name] for m in version.fallback_models],
+                model_options=dict(version.model_options),
             )
         )
 
@@ -146,6 +148,8 @@ def _agent_version(row: Row[Any]) -> AgentVersion:
         model=ModelRef(row.model_provider, row.model_name),
         tools=tuple(row.tools),
         created_at=row.created_at,
+        fallback_models=tuple(ModelRef(provider, name) for provider, name in row.fallback_models),
+        model_options=row.model_options,
     )
 
 
@@ -261,13 +265,16 @@ class _Tasks(_Repository):
         return [_task(row) for row in rows]
 
     async def lock_next_ready(self) -> Task | None:
+        # Lock the mission with the task, mission first in intent: cancellation locks the
+        # mission then its tasks, so a claim must never wait on a mission lock (deadlock).
         row = (
             await self._connection.execute(
                 select(t.tasks)
+                .join(t.missions, t.missions.c.id == t.tasks.c.mission_id)
                 .where(t.tasks.c.status == TaskStatus.READY.value)
                 .order_by(t.tasks.c.created_at)
                 .limit(1)
-                .with_for_update(skip_locked=True)
+                .with_for_update(skip_locked=True, of=[t.tasks, t.missions])
             )
         ).first()
         return None if row is None else _task(row)

@@ -16,6 +16,7 @@ from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.model import ModelRequest, ModelResponse, TextBlock, ToolUseBlock
 from forge.domain.risk import RiskLevel
 from forge.domain.tool import Idempotency, ToolDefinition, ToolResult
+from forge.inference.profiles import CachingMode, ModelProfile
 from forge.infrastructure.clock import SystemClock
 from forge.orchestration.agents import register_agent
 from forge.orchestration.missions import MissionRequest, submit_mission
@@ -26,6 +27,7 @@ from tests.integration.conftest import UowFactory
 TEST_MODEL = ModelRef("test", "scripted-1")
 # 1 micro-USD per input token, 2 per output token: Usage(100, 50) costs 200.
 TEST_PRICE = ModelPrice(input=1_000_000, output=2_000_000, cache_read=0, cache_write=0)
+TEST_PROFILE = ModelProfile(TEST_MODEL, 100_000, 4_096, TEST_PRICE, True, CachingMode.NONE, 0, 1)
 CALL_USAGE = Usage(input_tokens=100, output_tokens=50)
 CALL_COST = 200
 FAST_POLICY = ExecutionPolicy(retry_initial_backoff_seconds=0, retry_max_backoff_seconds=0)
@@ -139,7 +141,7 @@ def runtime(
         uow_factory=uow,
         clock=SystemClock(),
         models={TEST_MODEL.provider: model},
-        prices={TEST_MODEL: TEST_PRICE},
+        profiles={TEST_MODEL: TEST_PROFILE},
         tools={tool.definition.name: tool for tool in tools},
         worker_id=worker_id,
         lease_seconds=lease_seconds,

@@ -244,7 +244,7 @@ Agent routing answers:
 
 "Which agent should perform this task?"
 
-Model routing answers:
+Model routing answers (deterministically, once per execution; `docs/decisions/0004`):
 
 "Which model should this agent use?"
 

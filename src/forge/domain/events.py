@@ -176,6 +176,15 @@ class AgentStarted(DomainEvent):
 
 
 @dataclass(frozen=True, slots=True)
+class ModelRouted(DomainEvent):
+    aggregate_type = "execution"
+    event_type = "model.routed"
+    selected: str | None  # "provider/name"
+    candidates: tuple[str, ...]  # "provider/name: reason", in preference order
+    required_context_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCalled(DomainEvent):
     aggregate_type = "execution"
     event_type = "model.called"
@@ -186,6 +195,12 @@ class ModelCalled(DomainEvent):
     stop_reason: str
     usage: Usage
     cost_micro_usd: int
+    latency_ms: int
+    cache_savings_micro_usd: int  # cost avoided by cache reads, net of cache-write premium
+    context_tokens: int
+    context_blocks: tuple[str, ...]  # "key@version", render order
+    elided: tuple[str, ...]
+    cache_breakpoints: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)

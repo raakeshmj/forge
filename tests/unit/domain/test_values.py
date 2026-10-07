@@ -78,3 +78,15 @@ def test_mission_deadline() -> None:
 def test_execution_policy_validates() -> None:
     with pytest.raises(DomainError):
         ExecutionPolicy(max_steps=0)
+
+
+@pytest.mark.parametrize("field", ["system", "messages", "tools", "max_tokens", "model"])
+def test_model_options_cannot_override_forge_controlled_request_fields(field: str) -> None:
+    with pytest.raises(DomainError, match="FORGE-controlled"):
+        factories.agent_and_version(model_options={field: "anything"})
+
+
+def test_model_options_may_tune_provider_behaviour() -> None:
+    _, version = factories.agent_and_version(model_options={"output_config": {"effort": "low"}})
+
+    assert version.model_options == {"output_config": {"effort": "low"}}

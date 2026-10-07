@@ -18,6 +18,12 @@ def test_payload_excludes_envelope_fields_and_serialises_values() -> None:
         stop_reason="tool_use",
         usage=Usage(10, 5, 0, 0),
         cost_micro_usd=42,
+        latency_ms=12,
+        cache_savings_micro_usd=0,
+        context_tokens=300,
+        context_blocks=("system.platform@platform-1",),
+        elided=(),
+        cache_breakpoints=(),
     )
 
     assert event.event_type == "model.called"
@@ -35,6 +41,12 @@ def test_payload_excludes_envelope_fields_and_serialises_values() -> None:
             "cache_creation_input_tokens": 0,
         },
         "cost_micro_usd": 42,
+        "latency_ms": 12,
+        "cache_savings_micro_usd": 0,
+        "context_tokens": 300,
+        "context_blocks": ["system.platform@platform-1"],
+        "elided": [],
+        "cache_breakpoints": [],
     }
 
 

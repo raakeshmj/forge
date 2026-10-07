@@ -29,6 +29,8 @@ class AgentCreate(_Strict):
     role: str = Field(min_length=1, max_length=200)
     instructions: str = Field(min_length=1, max_length=50_000)
     model: ModelRefIn
+    fallback_models: list[ModelRefIn] = Field(default_factory=list, max_length=5)
+    model_options: dict[str, Any] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -86,6 +88,7 @@ class ExecutionView(BaseModel):
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
     cost_micro_usd: int
+    cache_hit_rate: float
     output: str | None
     failure_kind: str | None
     failure_detail: str | None
@@ -107,6 +110,7 @@ class ExecutionView(BaseModel):
             cache_read_input_tokens=execution.usage.cache_read_input_tokens,
             cache_creation_input_tokens=execution.usage.cache_creation_input_tokens,
             cost_micro_usd=execution.cost_micro_usd,
+            cache_hit_rate=_cache_hit_rate(execution),
             output=execution.output,
             failure_kind=None if execution.failure_kind is None else execution.failure_kind.value,
             failure_detail=execution.failure_detail,
@@ -169,3 +173,10 @@ class EventView(BaseModel):
             causation_id=record.causation_id,
             occurred_at=record.occurred_at,
         )
+
+
+def _cache_hit_rate(execution: Execution) -> float:
+    """Share of input tokens served from the provider's prompt cache."""
+    usage = execution.usage
+    total = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+    return round(usage.cache_read_input_tokens / total, 4) if total else 0.0
