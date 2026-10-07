@@ -52,7 +52,7 @@ Any non-terminal state ----> CANCELLED
 
 Terminal states: COMPLETED, FAILED, CANCELLED.
 
-The complete transition table is defined in Phase 1.
+The complete transition table is `MISSION_TRANSITIONS` in `src/forge/domain/mission.py`; the database constrains status values.
 
 ---
 
@@ -100,7 +100,9 @@ Any non-terminal state ----> CANCELLED
 
 Terminal states: COMPLETED, FAILED, CANCELLED.
 
-The complete transition table is defined in Phase 1.
+The complete transition table is `TASK_TRANSITIONS` in `src/forge/domain/task.py`.
+
+Phase 1 tasks carry `mission_id`, `objective`, `agent_id`, `allowed_tools`, and `status`; dependencies and task-level budget, deadline, and risk arrive with multi-task orchestration (Phase 4).
 
 ---
 
@@ -138,6 +140,9 @@ Contains:
 - evaluation profile
 
 A production execution references a specific Agent Version.
+
+Phase 1 versions carry role, instructions, model, and tool bindings; the other
+bindings are added by the phases that consume them.
 
 ---
 
@@ -270,7 +275,7 @@ Fields:
 
 # 13. EXECUTION
 
-Represents an actual run of a mission/task/agent.
+Represents an actual run of a task by a specific agent version.
 
 Fields:
 
@@ -281,10 +286,36 @@ Fields:
 - agent_version
 - model
 - status
+- attempt
 - started_at
 - completed_at
 - cost
 - token_usage
+- output
+- failure_kind
+- failure_detail
+
+States:
+
+```text
+RUNNING
+  |
+  +----> COMPLETED
+  |
+  +----> FAILED
+  |
+  +----> CANCELLED
+```
+
+An execution is created when a worker first claims its task. A crashed worker
+leaves it RUNNING under an expiring lease; recovery is a further `attempt` of the
+same execution, resumed from its latest checkpoint (`docs/decisions/0002`).
+
+Failure kinds: BUDGET_EXCEEDED, DEADLINE_EXCEEDED, MAX_STEPS_EXCEEDED,
+MODEL_FAILED, TOOL_OUTCOME_UNKNOWN, RECOVERY_EXHAUSTED.
+
+Each tool call is also recorded in a tool invocation ledger keyed by a
+deterministic idempotency key, so an interrupted call's outcome is never guessed.
 
 ---
 

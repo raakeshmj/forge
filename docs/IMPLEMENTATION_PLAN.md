@@ -59,6 +59,8 @@ Create the engineering foundation.
 
 # PHASE 1 — SINGLE AGENT RUNTIME
 
+Status: implemented. Decisions: `docs/decisions/0002` (durable execution), `docs/decisions/0003` (state, events, tracing).
+
 ## Objective
 
 Execute one durable agent mission.

@@ -61,9 +61,10 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "-m", "not integration"]
+addopts = ["-ra", "--strict-markers", "-m", "not integration and not e2e"]
 markers = [
     "integration: requires running PostgreSQL and Redis (see `make test-integration`)",
+    "e2e: drives the running Docker Compose stack (see `make e2e`)",
 ]
 filterwarnings = ["error"]
 
@@ -85,6 +86,12 @@ forbidden_modules = [
     "sqlalchemy",
     "psycopg",
     "redis",
+    "opentelemetry",
+    "forge.observability",
+    "forge.orchestration",
+    "forge.runtime",
+    "forge.inference",
+    "forge.tools",
 ]
 
 [[tool.importlinter.contracts]]
@@ -92,3 +99,15 @@ name = "Infrastructure adapters do not depend on the HTTP API"
 type = "forbidden"
 source_modules = ["forge.infrastructure"]
 forbidden_modules = ["forge.api", "fastapi", "starlette"]
+
+[[tool.importlinter.contracts]]
+name = "Control plane does not depend on the execution runtime"
+type = "forbidden"
+source_modules = ["forge.orchestration"]
+forbidden_modules = ["forge.runtime", "forge.api", "forge.infrastructure"]
+
+[[tool.importlinter.contracts]]
+name = "Inference and tools are adapters the runtime composes, never the reverse"
+type = "forbidden"
+source_modules = ["forge.inference", "forge.tools"]
+forbidden_modules = ["forge.runtime", "forge.orchestration", "forge.api", "forge.infrastructure"]

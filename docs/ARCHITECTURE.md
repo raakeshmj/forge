@@ -383,6 +383,9 @@ The implementation must allow a future Temporal backend.
 
 Domain logic must not depend directly on Temporal.
 
+Phase 1 semantics (leases, fencing, record-before-act, idempotency, retry,
+timeouts, cancellation, budgets) are specified in `docs/decisions/0002`.
+
 ---
 
 # 14. EVENT ARCHITECTURE
@@ -413,6 +416,9 @@ skill.candidate.created
 skill.validated
 skill.promoted
 ```
+
+Events are appended in the same transaction as the state change they describe;
+state tables remain authoritative (`docs/decisions/0003`).
 
 Events provide:
 

@@ -1,5 +1,5 @@
 # Canonical development commands. CI runs these same targets.
-.PHONY: install format lint typecheck boundaries test test-integration check up down migrate migration
+.PHONY: install format lint typecheck boundaries test test-integration e2e check up down migrate migration
 
 # Defaults point at the services started by `make up` (see compose.yaml host ports).
 FORGE_DATABASE_URL ?= postgresql+psycopg://forge:forge@127.0.0.1:15432/forge
@@ -28,6 +28,9 @@ test:  ## Unit tests (no external services)
 
 test-integration:  ## Integration tests against running PostgreSQL and Redis
 	$(SERVICE_ENV) uv run pytest -m integration
+
+e2e:  ## End-to-end demo against the running stack (`make up` first); kills and restarts the worker
+	uv run pytest -m e2e -s
 
 check: lint typecheck boundaries test  ## Everything that runs without external services
 

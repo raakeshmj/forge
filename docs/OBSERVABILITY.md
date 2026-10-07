@@ -38,6 +38,10 @@ Mission
         └── Decision
 ```
 
+A mission's trace id and its tasks' span ids are derived from their identifiers,
+so executions resumed by another process stay inside the same hierarchy. Mission
+and task spans are emitted once they are terminal (`docs/decisions/0003`).
+
 ---
 
 # 4. MISSION SPAN

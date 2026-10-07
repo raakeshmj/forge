@@ -65,8 +65,11 @@ class ExecutionPolicy:
     model_max_attempts: int = 3
     retry_initial_backoff_seconds: float = 0.5
     retry_max_backoff_seconds: float = 8.0
+    max_output_tokens: int = 4096
 
     def __post_init__(self) -> None:
+        if self.max_output_tokens < 1:
+            raise DomainError("max_output_tokens must be at least 1")
         if self.max_steps < 1:
             raise DomainError("max_steps must be at least 1")
         if self.model_timeout_seconds <= 0:

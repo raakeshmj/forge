@@ -172,6 +172,7 @@ class _Missions(_Repository):
                     "model_max_attempts": policy.model_max_attempts,
                     "retry_initial_backoff_seconds": policy.retry_initial_backoff_seconds,
                     "retry_max_backoff_seconds": policy.retry_max_backoff_seconds,
+                    "max_output_tokens": policy.max_output_tokens,
                 },
                 status=mission.status.value,
                 correlation_id=mission.correlation_id,
