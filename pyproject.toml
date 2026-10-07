@@ -1,0 +1,60 @@
+[project]
+name = "forge"
+version = "0.0.0"
+description = "FORGE: autonomous agent operations and continuous-learning platform"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.142.2",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",   # pycodestyle, pyflakes
+    "I",             # import order
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "SIM",           # simplifications
+    "RUF",           # ruff-specific
+    "BLE",           # no blind `except Exception` (CLAUDE.md §24)
+    "T20",           # no print; use logging
+    "PT",            # pytest style
+    "ASYNC",         # async pitfalls
+    "S",             # security (bandit)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is how pytest works
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src"
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "-m", "not integration"]
+markers = [
+    "integration: requires running PostgreSQL and Redis (see `make test-integration`)",
+]
+filterwarnings = ["error"]
