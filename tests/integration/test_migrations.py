@@ -1,32 +1,22 @@
 """Run the full migration history against a throwaway database, never the developer's."""
 
-import uuid
 from collections.abc import Iterator
 
 import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, make_url, text
+from sqlalchemy import create_engine, text
 
-from forge.config import Settings
+from tests.databases import scratch_database
 from tests.migrations import alembic_config
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def scratch_database_url(settings: Settings) -> Iterator[str]:
-    admin_url = make_url(settings.database_url)
-    name = f"forge_migration_test_{uuid.uuid4().hex[:12]}"
-    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-    try:
-        with admin.connect() as connection:
-            connection.execute(text(f'CREATE DATABASE "{name}"'))
-        yield admin_url.set(database=name).render_as_string(hide_password=False)
-    finally:
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        admin.dispose()
+def empty_database_url(server_url: str) -> Iterator[str]:
+    with scratch_database(server_url) as url:
+        yield url
 
 
 def _current_revision(database_url: str) -> str | None:
@@ -41,15 +31,25 @@ def _current_revision(database_url: str) -> str | None:
         engine.dispose()
 
 
-def test_upgrade_downgrade_upgrade_round_trip(scratch_database_url: str) -> None:
-    config = alembic_config(scratch_database_url)
+def test_upgrade_downgrade_upgrade_round_trip(empty_database_url: str) -> None:
+    config = alembic_config(empty_database_url)
     head = ScriptDirectory.from_config(config).get_current_head()
 
     command.upgrade(config, "head")
-    assert _current_revision(scratch_database_url) == head
+    assert _current_revision(empty_database_url) == head
 
     command.downgrade(config, "base")
-    assert _current_revision(scratch_database_url) is None
+    assert _current_revision(empty_database_url) is None
 
     command.upgrade(config, "head")
-    assert _current_revision(scratch_database_url) == head
+    assert _current_revision(empty_database_url) == head
+
+
+def test_each_migration_downgrades_one_step(empty_database_url: str) -> None:
+    config = alembic_config(empty_database_url)
+    revisions = [script.revision for script in ScriptDirectory.from_config(config).walk_revisions()]
+
+    command.upgrade(config, "head")
+    for expected_after in [*revisions[1:], None]:
+        command.downgrade(config, "-1")
+        assert _current_revision(empty_database_url) == expected_after

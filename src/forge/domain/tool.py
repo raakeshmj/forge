@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from uuid import UUID
 
 from forge.domain.common import DomainError, JSONValue
 from forge.domain.retry import RetryPolicy
@@ -58,3 +59,29 @@ class ToolResult:
     content: str
     is_error: bool = False
     cost_micro_usd: int = 0
+
+
+class InvocationStatus(StrEnum):
+    """INTENDED is committed before execution; still INTENDED after a crash = outcome unknown."""
+
+    INTENDED = "INTENDED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolInvocation:
+    """Ledger entry for one tool call, keyed by its deterministic idempotency key (ADR 0002)."""
+
+    idempotency_key: str
+    execution_id: UUID
+    turn: int
+    tool_use_id: str
+    tool: str
+    tool_version: str
+    status: InvocationStatus
+    invocations: int
+
+
+def idempotency_key(execution_id: UUID, turn: int, tool_use_id: str) -> str:
+    return f"{execution_id}:{turn}:{tool_use_id}"

@@ -3,13 +3,13 @@
 import uvicorn
 
 from forge.api.app import create_app
-from forge.config import Settings
+from forge.config import ApiSettings
 from forge.infrastructure import postgres, redis
 from forge.observability.logs import configure_logging
 
 
 def main() -> None:
-    settings = Settings.from_env()
+    settings = ApiSettings.from_env()
     configure_logging(settings.log_level)
 
     engine = postgres.create_engine(settings.database_url)
