@@ -47,3 +47,16 @@ def test_exception_type_is_recorded() -> None:
     entry = json.loads(JsonFormatter().format(record))
     assert entry["error_type"] == "TimeoutError"
     assert "redis ping timed out" in entry["exception"]
+
+
+def test_explicit_error_type_is_not_overwritten_by_exc_info() -> None:
+    try:
+        raise TimeoutError("wrapper")
+    except TimeoutError:
+        record = logging.LogRecord(
+            "forge.test", logging.WARNING, __file__, 1, "check failed", None, sys.exc_info()
+        )
+    record.error_type = "ConnectionRefusedError"
+
+    entry = json.loads(JsonFormatter().format(record))
+    assert entry["error_type"] == "ConnectionRefusedError"

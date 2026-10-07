@@ -1,0 +1,56 @@
+# Local development stack. Credentials here are development defaults only.
+# Host ports bind to loopback and are overridable to avoid clashing with other local stacks.
+name: forge
+
+x-forge-env: &forge-env
+  FORGE_DATABASE_URL: postgresql+psycopg://forge:${FORGE_POSTGRES_PASSWORD:-forge}@postgres:5432/forge
+  FORGE_REDIS_URL: redis://redis:6379/0
+  FORGE_LOG_LEVEL: ${FORGE_LOG_LEVEL:-INFO}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: ${FORGE_POSTGRES_PASSWORD:-forge}
+      POSTGRES_DB: forge
+    ports:
+      - "127.0.0.1:${FORGE_POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d forge"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    # Persistence disabled: Redis never holds authoritative state (ARCHITECTURE.md §20).
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${FORGE_REDIS_HOST_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment: *forge-env
+    ports:
+      - "127.0.0.1:${FORGE_API_HOST_PORT:-18000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:

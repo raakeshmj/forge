@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.142.2",
+    "psycopg[binary]>=3.3.6",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.4",
     "uvicorn>=0.54.0",
 ]
 
@@ -15,6 +18,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "anyio>=4.15.1",
     "httpx2>=2.13.1",
     "import-linter>=2.15",
     "mypy>=2.4.0",
@@ -58,3 +62,29 @@ markers = [
     "integration: requires running PostgreSQL and Redis (see `make test-integration`)",
 ]
 filterwarnings = ["error"]
+
+# Architectural boundaries (CLAUDE.md §5, docs/decisions/0001). Run with `make boundaries`.
+[tool.importlinter]
+root_package = "forge"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Domain depends on no framework, driver, or adapter"
+type = "forbidden"
+source_modules = ["forge.domain"]
+forbidden_modules = [
+    "forge.api",
+    "forge.infrastructure",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "sqlalchemy",
+    "psycopg",
+    "redis",
+]
+
+[[tool.importlinter.contracts]]
+name = "Infrastructure adapters do not depend on the HTTP API"
+type = "forbidden"
+source_modules = ["forge.infrastructure"]
+forbidden_modules = ["forge.api", "fastapi", "starlette"]

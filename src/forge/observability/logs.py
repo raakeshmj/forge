@@ -47,7 +47,7 @@ class JsonFormatter(logging.Formatter):
             if key not in _RESERVED_ATTRS and not key.startswith("_"):
                 entry[key] = value
         if record.exc_info and record.exc_info[0] is not None:
-            entry["error_type"] = record.exc_info[0].__qualname__
+            entry.setdefault("error_type", record.exc_info[0].__qualname__)
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
 
