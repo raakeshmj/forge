@@ -8,6 +8,8 @@ checkpoint, so committed work is never repeated.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Mapping, Sequence
@@ -61,6 +63,7 @@ from forge.observability.logs import correlation_id
 from forge.orchestration import missions
 from forge.tools import pipeline
 from forge.tools.base import Tool, ToolContext
+from forge.tools.search import loaded_tools
 
 _log = logging.getLogger(__name__)
 
@@ -144,16 +147,36 @@ async def claim_next(runtime: Runtime) -> Claim | None:
     return Claim(execution, fence)
 
 
-def exposed_tools(
+def authorized_tools(
     runtime: Runtime, version: AgentVersion, task: Task, mission: Mission
 ) -> tuple[ToolDefinition, ...]:
-    """Offer the model only tools a call could be authorized for; the pipeline still checks."""
+    """Every tool a call could be authorized for, sorted by name; the pipeline still checks."""
     return tuple(
         runtime.tools[name].definition
         for name in sorted(runtime.tools)
         if pipeline.authorize(
             name, tools=runtime.tools, version=version, task=task, mission=mission
         ).allowed
+    )
+
+
+def exposed_tools(
+    runtime: Runtime,
+    version: AgentVersion,
+    task: Task,
+    mission: Mission,
+    state: AgentState | None = None,
+) -> tuple[ToolDefinition, ...]:
+    """Eager tools, then deferred tools in the order `tools.search` loaded them (ADR 0005).
+
+    Loaded tools are appended, never interleaved, so earlier tools keep their positions.
+    """
+    authorized = authorized_tools(runtime, version, task, mission)
+    by_name = {tool.name: tool for tool in authorized}
+    loaded = loaded_tools(state) if state is not None else ()
+    return (
+        *(tool for tool in authorized if not tool.deferred),
+        *(by_name[name] for name in loaded if name in by_name and by_name[name].deferred),
     )
 
 
@@ -273,7 +296,7 @@ class ExecutionRunner:
         inputs = PlanningInputs(
             self._version,
             mission,
-            exposed_tools(self._rt, self._version, self._task, mission),
+            exposed_tools(self._rt, self._version, self._task, mission, self._state),
             self._state.messages,
         )
         output_tokens = min(policy.max_output_tokens, profile.max_output_tokens)
@@ -429,7 +452,12 @@ class ExecutionRunner:
         turn = self._state.turns - 1  # pending calls always belong to the latest model turn
         key = idempotency_key(self._execution.id, turn, call.id)
         decision = pipeline.authorize(
-            call.name, tools=self._rt.tools, version=self._version, task=self._task, mission=mission
+            call.name,
+            tools=self._rt.tools,
+            version=self._version,
+            task=self._task,
+            mission=mission,
+            arguments=call.arguments,
         )
         with tracing.tracer().start_as_current_span(
             "forge.tool.call",
@@ -461,11 +489,17 @@ class ExecutionRunner:
                 )
 
             invocation = await self._record_intent(call, turn, key, definition)
+            loaded = set(loaded_tools(self._state))
             context = ToolContext(
                 idempotency_key=key,
                 execution_id=self._execution.id,
                 mission_id=self._execution.mission_id,
                 agent_id=self._execution.agent_id,
+                discoverable=tuple(
+                    tool
+                    for tool in authorized_tools(self._rt, self._version, self._task, mission)
+                    if tool.deferred and tool.name not in loaded
+                ),
             )
             outcome = await pipeline.execute(tool, call.arguments, context)
             span.set_attribute("forge.retry_count", outcome.attempts - 1)
@@ -520,6 +554,7 @@ class ExecutionRunner:
             tool=call.name,
             stage=stage,
             reason=decision.reason,
+            arguments_sha256=arguments_digest(call),
         )
         result = ToolResultBlock(
             call.id, f"Tool call denied at {stage}: {decision.reason}", is_error=True
@@ -558,6 +593,7 @@ class ExecutionRunner:
                         tool_version=definition.version,
                         idempotency_key=key,
                         invocation=invocation.invocations,
+                        arguments_sha256=arguments_digest(call),
                     )
                 ],
             )
@@ -660,6 +696,12 @@ class ExecutionRunner:
     ) -> None:
         for event in events:
             await uow.events.append(event, correlation_id=self._correlation_id)
+
+
+def arguments_digest(call: ToolUseBlock) -> str:
+    """Audit fingerprint of a call's arguments; the arguments themselves stay in the checkpoint."""
+    canonical = json.dumps(dict(call.arguments), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _started(execution: Execution, worker_id: str) -> AgentStarted:

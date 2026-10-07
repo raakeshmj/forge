@@ -4,6 +4,8 @@ import asyncio
 import os
 import signal
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
+from pathlib import Path
 
 from forge.config import WorkerSettings
 from forge.inference.anthropic_client import AnthropicModelClient
@@ -18,7 +20,16 @@ from forge.observability.logs import configure_logging
 from forge.observability.tracing import configure_tracing
 from forge.runtime.agent_loop import Runtime
 from forge.runtime.worker import Worker
+from forge.security.secrets import EnvSecretResolver
+from forge.tools import config as tool_config
+from forge.tools import mcp as mcp_adapter
+from forge.tools import registry
+from forge.tools.base import Tool
 from forge.tools.demo import MetricsReadTool
+from forge.tools.http_api import HttpApiTool
+from forge.tools.mcp import McpConnection
+from forge.tools.registry import Discovered
+from forge.tools.search import ToolSearchTool
 
 
 def configured_models(env: Mapping[str, str]) -> dict[str, ModelClient]:
@@ -34,15 +45,39 @@ def configured_models(env: Mapping[str, str]) -> dict[str, ModelClient]:
     return models
 
 
+async def discover_tools(settings: WorkerSettings, stack: AsyncExitStack) -> list[Discovered]:
+    """Native tools, plus MCP servers and remote API tools from the operator's configuration."""
+    native: list[Tool] = [
+        MetricsReadTool(simulated_latency_seconds=settings.demo_tool_delay_seconds),
+        ToolSearchTool(),
+    ]
+    discovered = [Discovered(tool, source_ref=f"native:{tool.definition.name}") for tool in native]
+    if settings.tool_config_path is None:
+        return discovered
+    config = tool_config.load(Path(settings.tool_config_path))
+    for server in config.mcp_servers:
+        connection = await McpConnection.open(server, stack)
+        discovered.extend(await mcp_adapter.discover(connection, server))
+    secrets = EnvSecretResolver()
+    for http_tool in config.http_tools:
+        discovered.append(
+            Discovered(HttpApiTool(http_tool, secrets), source_ref=f"remote:{http_tool.url}")
+        )
+    return discovered
+
+
 async def serve(settings: WorkerSettings) -> None:
     engine = postgres.create_engine(settings.database_url)
-    metrics = MetricsReadTool(simulated_latency_seconds=settings.demo_tool_delay_seconds)
+    clock = SystemClock()
+    stack = AsyncExitStack()
+    uow_factory = lambda: PostgresUnitOfWork(engine)  # noqa: E731
+    registered = await registry.sync(uow_factory, clock, await discover_tools(settings, stack))
     runtime = Runtime(
-        uow_factory=lambda: PostgresUnitOfWork(engine),
-        clock=SystemClock(),
+        uow_factory=uow_factory,
+        clock=clock,
         models=configured_models(os.environ),
         profiles=PROFILES,
-        tools={metrics.definition.name: metrics},
+        tools=registered.active,
         worker_id=settings.worker_id,
         lease_seconds=settings.lease_seconds,
     )
@@ -61,6 +96,7 @@ async def serve(settings: WorkerSettings) -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        await stack.aclose()
         await engine.dispose()
 
 

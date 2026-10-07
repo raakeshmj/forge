@@ -137,6 +137,8 @@ A repeated mission demonstrates measurable context-cache reuse.
 
 # PHASE 3 — TOOL RUNTIME AND MCP
 
+Status: implemented. Decisions: `docs/decisions/0005`. Credential references, secret redaction, and egress control were pulled forward from Phase 8 because secure remote tools need them.
+
 ## Objective
 
 Create a secure tool execution layer.

@@ -90,6 +90,9 @@ class RecordingTool:
     risk: RiskLevel = RiskLevel.LOW
     max_attempts: int = 1
     timeout_seconds: float = 5.0
+    deferred: bool = False
+    description: str | None = None
+    input_schema: dict[str, JSONValue] | None = None
     behaviours: list[str] = field(default_factory=list)  # consumed one per invocation
     invocations: list[str] = field(default_factory=list)
     effects: dict[str, int] = field(default_factory=dict)
@@ -100,14 +103,15 @@ class RecordingTool:
         return ToolDefinition(
             name=self.name,
             version="1",
-            description=f"{self.name} test tool",
-            input_schema={"type": "object"},
+            description=self.description or f"{self.name} test tool",
+            input_schema=self.input_schema or {"type": "object"},
             risk=self.risk,
             idempotency=self.idempotency,
             timeout_seconds=self.timeout_seconds,
             max_attempts=self.max_attempts,
             retry_initial_backoff_seconds=0,
             retry_max_backoff_seconds=0,
+            deferred=self.deferred,
         )
 
     async def invoke(self, arguments: Mapping[str, JSONValue], context: ToolContext) -> ToolResult:

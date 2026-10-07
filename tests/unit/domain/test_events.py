@@ -60,6 +60,7 @@ def test_events_are_immutable() -> None:
         tool_version="1",
         idempotency_key="k",
         invocation=1,
+        arguments_sha256="0" * 64,
     )
 
     with pytest.raises(AttributeError):

@@ -8,6 +8,8 @@ dependencies = [
     "alembic>=1.20.0",
     "anthropic>=1.12.0",
     "fastapi>=0.142.2",
+    "jsonschema>=4.26.0",
+    "mcp>=2.3.0",
     "openai>=3.26.0",
     "opentelemetry-api>=1.45.1",
     "opentelemetry-exporter-otlp-proto-http>=1.45.1",
@@ -30,6 +32,7 @@ dev = [
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.16.10",
+    "types-jsonschema>=4.26.0.20261006",
 ]
 
 [tool.ruff]
@@ -114,3 +117,15 @@ name = "Inference and tools are adapters the runtime composes, never the reverse
 type = "forbidden"
 source_modules = ["forge.inference", "forge.tools"]
 forbidden_modules = ["forge.runtime", "forge.orchestration", "forge.api", "forge.infrastructure"]
+
+[[tool.importlinter.contracts]]
+name = "MCP SDK is confined to its adapter"
+type = "forbidden"
+source_modules = [
+    "forge.domain", "forge.orchestration", "forge.runtime", "forge.inference", "forge.api",
+    "forge.infrastructure", "forge.observability", "forge.security", "forge.tools.base",
+    "forge.tools.pipeline", "forge.tools.registry", "forge.tools.search", "forge.tools.validation",
+    "forge.tools.http_api", "forge.tools.config",
+]
+forbidden_modules = ["mcp"]
+allow_indirect_imports = true

@@ -94,6 +94,10 @@ Tools should support:
 
 Only relevant tools should be exposed when possible.
 
+Deferred tools are offered only after `tools.search` loads them; the loaded set
+is derived from the transcript and appended after the eager tools
+(`docs/decisions/0005`).
+
 ---
 
 # 7. MEMORY CONTEXT

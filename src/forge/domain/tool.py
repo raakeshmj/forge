@@ -1,10 +1,13 @@
 """Tool definitions and results (docs/DOMAIN_MODEL.md §11)."""
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from forge.domain.common import DomainError, JSONValue
 from forge.domain.retry import RetryPolicy
@@ -25,6 +28,12 @@ class Idempotency(StrEnum):
         return self is not Idempotency.NON_IDEMPOTENT
 
 
+class ToolSource(StrEnum):
+    NATIVE = "native"
+    MCP = "mcp"
+    REMOTE = "remote"
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
@@ -37,6 +46,8 @@ class ToolDefinition:
     max_attempts: int = 1
     retry_initial_backoff_seconds: float = 0.5
     retry_max_backoff_seconds: float = 4.0
+    source: ToolSource = ToolSource.NATIVE
+    deferred: bool = False  # offered to the model only after `tools.search` loads it
 
     def __post_init__(self) -> None:
         if not _TOOL_NAME.fullmatch(self.name) or "__" in self.name:
@@ -91,3 +102,55 @@ class ToolInvocation:
 
 def idempotency_key(execution_id: UUID, turn: int, tool_use_id: str) -> str:
     return f"{execution_id}:{turn}:{tool_use_id}"
+
+
+def definition_sha256(definition: ToolDefinition) -> str:
+    """Fingerprint of everything that determines a tool's behaviour and authority (ADR 0005)."""
+    canonical = {
+        "name": definition.name,
+        "version": definition.version,
+        "description": definition.description,
+        "input_schema": definition.input_schema,
+        "risk": definition.risk.value,
+        "idempotency": definition.idempotency.value,
+        "timeout_seconds": definition.timeout_seconds,
+        "max_attempts": definition.max_attempts,
+        "source": definition.source.value,
+        "deferred": definition.deferred,
+    }
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+
+
+class ToolStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    QUARANTINED = "QUARANTINED"  # changed since it was pinned; needs an operator to pin again
+
+
+@dataclass(frozen=True, slots=True)
+class ToolVersionRecord:
+    """An immutable registered version of a tool."""
+
+    name: str
+    version: str
+    source: ToolSource
+    source_ref: str  # e.g. "mcp:metrics-server/query_latency"
+    definition_sha256: str
+    registered_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredTool:
+    name: str
+    pinned_version: str
+    pinned_sha256: str
+    status: ToolStatus
+    reason: str  # why quarantined; empty when active
+    updated_at: datetime
+
+
+def tool_aggregate_id(name: str) -> UUID:
+    """Stable aggregate id for a tool's registry events."""
+    return uuid5(_TOOL_NAMESPACE, name)
+
+
+_TOOL_NAMESPACE = UUID("0b6c2d0e-7a8f-4f6e-9c43-5d2b1a7e9f10")

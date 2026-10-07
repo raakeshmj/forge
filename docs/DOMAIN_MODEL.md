@@ -258,6 +258,9 @@ Sources:
 - MCP
 - remote
 
+Tool versions are immutable registry records fingerprinted by their definition;
+a tool is ACTIVE or QUARANTINED (`docs/decisions/0005`).
+
 ---
 
 # 12. MODEL PROFILE

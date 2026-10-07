@@ -15,7 +15,12 @@ from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution
 from forge.domain.mission import Mission
 from forge.domain.task import Task
-from forge.domain.tool import InvocationStatus, ToolInvocation
+from forge.domain.tool import (
+    InvocationStatus,
+    RegisteredTool,
+    ToolInvocation,
+    ToolVersionRecord,
+)
 
 
 class NotFoundError(LookupError):
@@ -112,6 +117,17 @@ class ToolInvocationRepository(Protocol):
     async def record_outcome(self, idempotency_key: str, status: InvocationStatus) -> None: ...
 
 
+class ToolRegistryRepository(Protocol):
+    async def get(self, name: str, *, for_update: bool = False) -> RegisteredTool | None: ...
+    async def list(self) -> list[RegisteredTool]: ...
+    async def get_version(self, name: str, version: str) -> ToolVersionRecord | None: ...
+    async def add_version(self, record: ToolVersionRecord) -> None:
+        """Insert if new; an existing (name, version) is left unchanged."""
+        ...
+
+    async def save(self, tool: RegisteredTool) -> None: ...
+
+
 class EventRepository(Protocol):
     async def append(
         self,
@@ -142,6 +158,8 @@ class UnitOfWork(Protocol):
     def tool_invocations(self) -> ToolInvocationRepository: ...
     @property
     def events(self) -> EventRepository: ...
+    @property
+    def tool_registry(self) -> ToolRegistryRepository: ...
 
     async def __aenter__(self) -> Self: ...
     async def __aexit__(

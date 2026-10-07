@@ -28,6 +28,8 @@ class ToolContext:
     execution_id: UUID
     mission_id: UUID
     agent_id: UUID
+    # Deferred tools this agent may load; only `tools.search` reads it.
+    discoverable: tuple[ToolDefinition, ...] = ()
 
 
 class Tool(Protocol):

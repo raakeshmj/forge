@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from forge.api import agents, health, missions
+from forge.api import agents, health, missions, tools
 from forge.api.correlation import correlation_middleware
 from forge.domain.common import DomainError
 from forge.domain.repositories import AlreadyExistsError, Clock, NotFoundError, UnitOfWorkFactory
@@ -39,6 +39,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(agents.router)
     app.include_router(missions.router)
+    app.include_router(tools.router)
     _register_error_handlers(app)
     return app
 

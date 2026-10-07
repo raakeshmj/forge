@@ -223,6 +223,7 @@ class ToolCalled(DomainEvent):
     tool_version: str
     idempotency_key: str
     invocation: int  # 1 on first call; >1 when re-executed after a crash
+    arguments_sha256: str  # matches calls in audits without storing their content
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +255,7 @@ class ToolDenied(DomainEvent):
     tool: str
     stage: str
     reason: str
+    arguments_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,3 +287,37 @@ class AgentFailed(DomainEvent):
 class AgentCancelled(DomainEvent):
     aggregate_type = "execution"
     event_type = "agent.cancelled"
+
+
+# --- Tool registry ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRegistered(DomainEvent):
+    aggregate_type = "tool"
+    event_type = "tool.registered"
+    name: str
+    version: str
+    source: str
+    source_ref: str
+    definition_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolQuarantined(DomainEvent):
+    aggregate_type = "tool"
+    event_type = "tool.quarantined"
+    name: str
+    pinned_version: str
+    observed_version: str
+    observed_sha256: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolPinned(DomainEvent):
+    aggregate_type = "tool"
+    event_type = "tool.pinned"
+    name: str
+    version: str
+    definition_sha256: str

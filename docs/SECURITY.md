@@ -96,6 +96,10 @@ Tools resolve credentials at execution time.
 
 Models receive only the minimum necessary information.
 
+Implemented: tools hold secret references resolved at execution time
+(`SecretResolver`); any echoed secret is redacted before a result reaches the
+model (`docs/decisions/0005`).
+
 ---
 
 # 7. MCP SECURITY
@@ -113,6 +117,11 @@ Validate:
 - returned content
 
 MCP responses must not automatically grant permissions.
+
+Implemented: servers and their tools are allowlisted in operator configuration,
+which also sets risk and idempotency; only input schemas are taken from servers;
+schema changes are quarantined until pinned; stdio servers get only configured
+environment variables; results are text-only and size-capped (`docs/decisions/0005`).
 
 ---
 
@@ -138,6 +147,10 @@ Remote tools must validate:
 - IP ranges
 - redirects
 - private network access
+
+Implemented in `src/forge/security/egress.py`: every resolved address is checked,
+the connection is pinned to the vetted address (Host header and TLS SNI preserved),
+and redirects are never followed.
 
 ---
 

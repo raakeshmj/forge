@@ -29,7 +29,14 @@ from forge.domain.repositories import (
 )
 from forge.domain.risk import RiskLevel
 from forge.domain.task import Task, TaskStatus
-from forge.domain.tool import InvocationStatus, ToolInvocation
+from forge.domain.tool import (
+    InvocationStatus,
+    RegisteredTool,
+    ToolInvocation,
+    ToolSource,
+    ToolStatus,
+    ToolVersionRecord,
+)
 from forge.infrastructure import tables as t
 
 
@@ -54,6 +61,7 @@ class PostgresUnitOfWork:
         self.checkpoints = _Checkpoints(connection)
         self.tool_invocations = _ToolInvocations(connection)
         self.events = _Events(connection)
+        self.tool_registry = _ToolRegistry(connection)
         return self
 
     async def __aexit__(
@@ -631,4 +639,78 @@ def _event(row: Row[Any]) -> EventRecord:
         correlation_id=row.correlation_id,
         causation_id=row.causation_id,
         occurred_at=row.occurred_at,
+    )
+
+
+# --- Tool registry ---------------------------------------------------------------------
+
+
+class _ToolRegistry(_Repository):
+    async def get(self, name: str, *, for_update: bool = False) -> RegisteredTool | None:
+        statement = select(t.tools).where(t.tools.c.name == name)
+        if for_update:
+            statement = statement.with_for_update()
+        row = (await self._connection.execute(statement)).first()
+        return None if row is None else _registered(row)
+
+    async def list(self) -> list[RegisteredTool]:
+        rows = await self._connection.execute(select(t.tools).order_by(t.tools.c.name))
+        return [_registered(row) for row in rows]
+
+    async def get_version(self, name: str, version: str) -> ToolVersionRecord | None:
+        row = (
+            await self._connection.execute(
+                select(t.tool_versions).where(
+                    t.tool_versions.c.name == name, t.tool_versions.c.version == version
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        return ToolVersionRecord(
+            name=row.name,
+            version=row.version,
+            source=ToolSource(row.source),
+            source_ref=row.source_ref,
+            definition_sha256=row.definition_sha256,
+            registered_at=row.registered_at,
+        )
+
+    async def add_version(self, record: ToolVersionRecord) -> None:
+        await self._connection.execute(
+            pg_insert(t.tool_versions)
+            .values(
+                name=record.name,
+                version=record.version,
+                source=record.source.value,
+                source_ref=record.source_ref,
+                definition_sha256=record.definition_sha256,
+                registered_at=record.registered_at,
+            )
+            .on_conflict_do_nothing()
+        )
+
+    async def save(self, tool: RegisteredTool) -> None:
+        values = {
+            "pinned_version": tool.pinned_version,
+            "pinned_sha256": tool.pinned_sha256,
+            "status": tool.status.value,
+            "reason": tool.reason,
+            "updated_at": tool.updated_at,
+        }
+        await self._connection.execute(
+            pg_insert(t.tools)
+            .values(name=tool.name, **values)
+            .on_conflict_do_update(index_elements=[t.tools.c.name], set_=values)
+        )
+
+
+def _registered(row: Row[Any]) -> RegisteredTool:
+    return RegisteredTool(
+        name=row.name,
+        pinned_version=row.pinned_version,
+        pinned_sha256=row.pinned_sha256,
+        status=ToolStatus(row.status),
+        reason=row.reason,
+        updated_at=row.updated_at,
     )

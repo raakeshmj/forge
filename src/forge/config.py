@@ -58,6 +58,7 @@ class WorkerSettings:
     poll_interval_seconds: float
     demo_tool_delay_seconds: float
     database_url: str = field(repr=False)
+    tool_config_path: str | None = None  # MCP servers and remote API tools (ADR 0005)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -75,6 +76,7 @@ class WorkerSettings:
             poll_interval_seconds=reader.positive("FORGE_WORKER_POLL_SECONDS", 1.0),
             demo_tool_delay_seconds=delay,
             database_url=reader.required("FORGE_DATABASE_URL"),
+            tool_config_path=reader.optional("FORGE_TOOL_CONFIG"),
         )
         reader.raise_if_invalid()
         return settings
@@ -89,6 +91,9 @@ class _Reader:
 
     def text(self, name: str, *, default: str) -> str:
         return self._source.get(name, default)
+
+    def optional(self, name: str) -> str | None:
+        return self._source.get(name) or None
 
     def required(self, name: str) -> str:
         value = self._source.get(name, "")

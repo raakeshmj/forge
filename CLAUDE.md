@@ -392,6 +392,7 @@ Every tool invocation must go through:
 
 agent identity
 → permission check
+→ argument validation
 → risk check
 → policy evaluation / approval (per risk level, see §21)
 → execution

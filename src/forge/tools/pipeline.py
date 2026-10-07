@@ -1,6 +1,6 @@
 """The only path from a model tool request to tool execution (CLAUDE.md §16, ARCHITECTURE §18).
 
-identity -> permission -> risk -> policy -> execution -> audit. Audit is the
+identity -> permission -> validation -> risk -> policy -> execution -> audit. Audit is the
 `tool.*` events the runtime commits. Stages owned by later phases deny: with no
 Policy Engine or Approval Service yet, anything above LOW risk is refused.
 """
@@ -17,11 +17,13 @@ from forge.domain.risk import RiskLevel
 from forge.domain.task import Task
 from forge.domain.tool import ToolResult
 from forge.tools.base import Tool, ToolContext, ToolExecutionError
+from forge.tools.validation import argument_errors
 
 
 class Stage(StrEnum):
     IDENTITY = "identity"
     PERMISSION = "permission"
+    VALIDATION = "validation"
     RISK = "risk"
     POLICY = "policy"
 
@@ -49,7 +51,9 @@ def authorize(
     version: AgentVersion,
     task: Task,
     mission: Mission,
+    arguments: Mapping[str, JSONValue] | None = None,
 ) -> Decision:
+    """Run every stage before execution. `arguments=None` asks only whether a call could pass."""
     if version.agent_id != task.agent_id or task.mission_id != mission.id:
         return Decision(False, Stage.IDENTITY, "execution identity does not match the task")
     tool = tools.get(tool_name)
@@ -59,6 +63,10 @@ def authorize(
         return Decision(False, Stage.PERMISSION, "agent version is not bound to this tool")
     if tool_name not in task.allowed_tools:
         return Decision(False, Stage.PERMISSION, "task does not allow this tool")
+    if arguments is not None:
+        errors = argument_errors(tool.definition, arguments)
+        if errors:
+            return Decision(False, Stage.VALIDATION, "invalid arguments: " + "; ".join(errors))
     risk = tool.definition.risk
     if risk.exceeds(mission.risk_policy.max_risk):
         ceiling = mission.risk_policy.max_risk

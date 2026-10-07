@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-2 are implemented: a durable single-agent runtime with provider-aware inference, explicit context planning, and provider-native prompt caching. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-3 are implemented: a durable single-agent runtime with provider-aware inference, explicit context planning, provider-native prompt caching, and a secure tool runtime (registry, MCP, remote API tools). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -43,6 +43,14 @@ Agents can name Anthropic or OpenAI models (with `fallback_models`); the worker
 enables a provider only when its credentials (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`) are present, and routes around providers that are not.
 `make test-live` exercises real prompt caching when credentials are set.
+
+## Tools
+
+Native tools (`metrics.read`, `tools.search`) are always registered. MCP servers
+and remote API tools are declared in a JSON file named by `FORGE_TOOL_CONFIG`
+(format in `src/forge/tools/config.py`); credentials are referenced by name and
+read from `FORGE_SECRET_<NAME>` at execution time. `GET /tools` shows each
+tool's pinned version and status; `POST /tools/{name}/pin` approves a changed one.
 
 ## Local services
 

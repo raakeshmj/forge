@@ -340,6 +340,9 @@ Tool Registry (resolve tool definition)
 Identity + Permission
  |
  v
+Argument validation (JSON Schema)
+ |
+ v
 Risk Engine
  |
  v
@@ -361,7 +364,9 @@ Result
 Audit + Telemetry
 ```
 
-The security ordering in §18 is canonical.
+The security ordering in §18 is canonical. Tool definitions are pinned in the
+Tool Registry; a tool that changes behind FORGE's back is quarantined until an
+operator pins it (`docs/decisions/0005`).
 
 ---
 
@@ -527,6 +532,9 @@ Identity
  |
  v
 Permission
+ |
+ v
+Validation
  |
  v
 Risk

@@ -153,3 +153,25 @@ events = Table(
     _uuid("causation_id", nullable=True),
     _ts("occurred_at"),
 )
+
+tool_versions = Table(
+    "tool_versions",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("version", Text, primary_key=True),
+    Column("source", Text, nullable=False),
+    Column("source_ref", Text, nullable=False),
+    Column("definition_sha256", Text, nullable=False),
+    _ts("registered_at"),
+)
+
+tools = Table(
+    "tools",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("pinned_version", Text, nullable=False),
+    Column("pinned_sha256", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    _ts("updated_at"),
+)
