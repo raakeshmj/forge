@@ -85,7 +85,7 @@ class AgentRegistered(DomainEvent):
 class MissionCreated(DomainEvent):
     aggregate_type = "mission"
     event_type = "mission.created"
-    agent_id: UUID
+    agent_id: UUID | None  # the single-task agent or the planner; None for explicit plans
     budget_micro_usd: int
     max_risk: str
     deadline: datetime | None
@@ -132,8 +132,30 @@ class MissionCancelled(DomainEvent):
 class TaskCreated(DomainEvent):
     aggregate_type = "task"
     event_type = "task.created"
-    agent_id: UUID
+    key: str
+    kind: str
+    agent_id: UUID | None
     allowed_tools: tuple[str, ...]
+    depends_on: tuple[str, ...]  # task keys
+    required_capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRouted(DomainEvent):
+    aggregate_type = "task"
+    event_type = "task.routed"
+    agent_id: UUID | None
+    candidates: tuple[str, ...]  # "agent-name: reason"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRetried(DomainEvent):
+    aggregate_type = "task"
+    event_type = "task.retried"
+    failed_execution_id: UUID
+    failure_kind: str
+    attempt: int
+    max_attempts: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +176,7 @@ class TaskFailed(DomainEvent):
     aggregate_type = "task"
     event_type = "task.failed"
     failure_kind: str
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)

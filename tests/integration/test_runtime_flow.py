@@ -73,6 +73,7 @@ async def test_mission_agent_model_tool_model_result(uow: UowFactory) -> None:
     assert [e.event_type for e in events] == [
         "mission.created",
         "task.created",
+        "task.routed",
         "mission.planned",
         "task.started",
         "mission.started",

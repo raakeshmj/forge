@@ -207,6 +207,9 @@ Example:
 
 The scheduler executes independent tasks concurrently.
 
+Plans, scheduling, routing, delegation, retries, and shared budgets are specified
+in `docs/decisions/0006`.
+
 ---
 
 # 8. AGENT ROUTING

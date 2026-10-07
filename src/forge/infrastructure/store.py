@@ -5,11 +5,12 @@ Every lease comparison uses database time so workers never compare clocks.
 
 import json
 from dataclasses import replace
+from datetime import datetime
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID, uuid4
 
-from sqlalchemy import Row, and_, func, insert, select, text, update
+from sqlalchemy import Row, and_, delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
@@ -28,7 +29,7 @@ from forge.domain.repositories import (
     NotFoundError,
 )
 from forge.domain.risk import RiskLevel
-from forge.domain.task import Task, TaskStatus
+from forge.domain.task import Task, TaskKind, TaskStatus
 from forge.domain.tool import (
     InvocationStatus,
     RegisteredTool,
@@ -62,6 +63,7 @@ class PostgresUnitOfWork:
         self.tool_invocations = _ToolInvocations(connection)
         self.events = _Events(connection)
         self.tool_registry = _ToolRegistry(connection)
+        self.budget = _Budget(connection)
         return self
 
     async def __aexit__(
@@ -121,6 +123,7 @@ class _Agents(_Repository):
                 created_at=version.created_at,
                 fallback_models=[[m.provider, m.name] for m in version.fallback_models],
                 model_options=dict(version.model_options),
+                capabilities=list(version.capabilities),
             )
         )
 
@@ -129,6 +132,33 @@ class _Agents(_Repository):
         return Agent(
             id=row.id, name=row.name, current_version=row.current_version, created_at=row.created_at
         )
+
+    async def list_current(self) -> list[tuple[Agent, AgentVersion]]:
+        rows = await self._connection.execute(
+            select(
+                t.agent_versions,
+                t.agents.c.name.label("agent_name"),
+                t.agents.c.current_version.label("agent_current_version"),
+                t.agents.c.created_at.label("agent_created_at"),
+            )
+            .join(
+                t.agents,
+                and_(
+                    t.agents.c.id == t.agent_versions.c.agent_id,
+                    t.agents.c.current_version == t.agent_versions.c.version,
+                ),
+            )
+            .order_by(t.agents.c.name)
+        )
+        return [
+            (
+                Agent(
+                    row.agent_id, row.agent_name, row.agent_current_version, row.agent_created_at
+                ),
+                _agent_version(row),
+            )
+            for row in rows
+        ]
 
     async def get_version(self, version_id: UUID) -> AgentVersion:
         statement = select(t.agent_versions).where(t.agent_versions.c.id == version_id)
@@ -156,6 +186,7 @@ def _agent_version(row: Row[Any]) -> AgentVersion:
         model=ModelRef(row.model_provider, row.model_name),
         tools=tuple(row.tools),
         created_at=row.created_at,
+        capabilities=tuple(row.capabilities),
         fallback_models=tuple(ModelRef(provider, name) for provider, name in row.fallback_models),
         model_options=row.model_options,
     )
@@ -190,6 +221,7 @@ class _Missions(_Repository):
                 correlation_id=mission.correlation_id,
                 created_at=mission.created_at,
                 updated_at=mission.updated_at,
+                tool_scope=None if mission.tool_scope is None else list(mission.tool_scope),
             )
         )
 
@@ -213,6 +245,7 @@ class _Missions(_Repository):
             correlation_id=row.correlation_id,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            tool_scope=None if row.tool_scope is None else tuple(row.tool_scope),
         )
 
     async def update(self, mission: Mission) -> Mission:
@@ -247,6 +280,12 @@ class _Tasks(_Repository):
                 status=task.status.value,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
+                key=task.key,
+                kind=task.kind.value,
+                dependencies=[str(d) for d in task.dependencies],
+                required_capabilities=list(task.required_capabilities),
+                max_attempts=task.max_attempts,
+                attempts=task.attempts,
             )
         )
 
@@ -260,7 +299,14 @@ class _Tasks(_Repository):
         result = await self._connection.execute(
             update(t.tasks)
             .where(t.tasks.c.id == task.id, t.tasks.c.version == task.version)
-            .values(status=task.status.value, updated_at=task.updated_at, version=task.version + 1)
+            .values(
+                status=task.status.value,
+                updated_at=task.updated_at,
+                version=task.version + 1,
+                agent_id=task.agent_id,
+                allowed_tools=list(task.allowed_tools),
+                attempts=task.attempts,
+            )
         )
         if result.rowcount != 1:
             raise ConcurrentUpdateError("task", task.id)
@@ -279,13 +325,24 @@ class _Tasks(_Repository):
             await self._connection.execute(
                 select(t.tasks)
                 .join(t.missions, t.missions.c.id == t.tasks.c.mission_id)
-                .where(t.tasks.c.status == TaskStatus.READY.value)
+                .where(t.tasks.c.status == TaskStatus.READY.value, t.tasks.c.agent_id.is_not(None))
                 .order_by(t.tasks.c.created_at)
                 .limit(1)
                 .with_for_update(skip_locked=True, of=[t.tasks, t.missions])
             )
         ).first()
         return None if row is None else _task(row)
+
+    async def workload(self) -> dict[UUID, int]:
+        rows = await self._connection.execute(
+            select(t.tasks.c.agent_id, func.count())
+            .where(
+                t.tasks.c.status.in_([TaskStatus.READY.value, TaskStatus.RUNNING.value]),
+                t.tasks.c.agent_id.is_not(None),
+            )
+            .group_by(t.tasks.c.agent_id)
+        )
+        return {row[0]: int(row[1]) for row in rows}
 
 
 def _task(row: Row[Any]) -> Task:
@@ -299,6 +356,12 @@ def _task(row: Row[Any]) -> Task:
         status=TaskStatus(row.status),
         created_at=row.created_at,
         updated_at=row.updated_at,
+        key=row.key,
+        kind=TaskKind(row.kind),
+        dependencies=tuple(UUID(d) for d in row.dependencies),
+        required_capabilities=tuple(row.required_capabilities),
+        max_attempts=row.max_attempts,
+        attempts=row.attempts,
     )
 
 
@@ -323,6 +386,7 @@ class _Executions(_Repository):
                 model_provider=execution.model.provider,
                 model_name=execution.model.name,
                 attempt=execution.attempt,
+                task_attempt=execution.task_attempt,
                 fence=fence,
                 lease_owner=worker_id,
                 lease_expires_at=_lease_until(lease_seconds),
@@ -409,6 +473,17 @@ class _Executions(_Repository):
         )
         return int(total or 0)
 
+    async def latest_for_task(self, task_id: UUID) -> Execution | None:
+        row = (
+            await self._connection.execute(
+                select(t.executions)
+                .where(t.executions.c.task_id == task_id)
+                .order_by(t.executions.c.task_attempt.desc())
+                .limit(1)
+            )
+        ).first()
+        return None if row is None else _execution(row)
+
     @staticmethod
     def _held(execution_id: UUID, fence: int) -> tuple[Any, ...]:
         return (
@@ -455,6 +530,7 @@ def _execution(row: Row[Any]) -> Execution:
         failure_detail=row.failure_detail,
         started_at=row.started_at,
         completed_at=row.completed_at,
+        task_attempt=row.task_attempt,
     )
 
 
@@ -714,3 +790,35 @@ def _registered(row: Row[Any]) -> RegisteredTool:
         reason=row.reason,
         updated_at=row.updated_at,
     )
+
+
+# --- Budget reservations ---------------------------------------------------------------
+
+
+class _Budget(_Repository):
+    async def reserved(self, mission_id: UUID, *, excluding: UUID | None = None) -> int:
+        statement = select(
+            func.coalesce(func.sum(t.budget_reservations.c.amount_micro_usd), 0)
+        ).where(t.budget_reservations.c.mission_id == mission_id)
+        if excluding is not None:
+            statement = statement.where(t.budget_reservations.c.execution_id != excluding)
+        return int(await self._connection.scalar(statement) or 0)
+
+    async def reserve(
+        self, execution_id: UUID, mission_id: UUID, amount: int, now: datetime
+    ) -> None:
+        values = {"mission_id": mission_id, "amount_micro_usd": amount, "created_at": now}
+        await self._connection.execute(
+            pg_insert(t.budget_reservations)
+            .values(execution_id=execution_id, **values)
+            .on_conflict_do_update(
+                index_elements=[t.budget_reservations.c.execution_id], set_=values
+            )
+        )
+
+    async def release(self, execution_id: UUID) -> None:
+        await self._connection.execute(
+            delete(t.budget_reservations).where(
+                t.budget_reservations.c.execution_id == execution_id
+            )
+        )

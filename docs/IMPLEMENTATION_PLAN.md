@@ -165,6 +165,8 @@ Agents can securely execute both native and MCP tools.
 
 # PHASE 4 — MULTI-AGENT ORCHESTRATION
 
+Status: implemented. Decisions: `docs/decisions/0006`.
+
 ## Objective
 
 Coordinate multiple agents.

@@ -26,6 +26,7 @@ class ModelRefIn(_Strict):
 
 class AgentCreate(_Strict):
     name: str = _Name
+    capabilities: list[str] = Field(default_factory=list, max_length=50)
     role: str = Field(min_length=1, max_length=200)
     instructions: str = Field(min_length=1, max_length=50_000)
     model: ModelRefIn
@@ -46,9 +47,24 @@ class ExecutionPolicyIn(_Strict):
     model_max_attempts: int = Field(default=3, ge=1, le=10)
 
 
-class MissionCreate(_Strict):
+class TaskSpecIn(_Strict):
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     objective: str = Field(min_length=1, max_length=10_000)
-    agent_id: UUID
+    depends_on: list[str] = Field(default_factory=list, max_length=20)
+    required_capabilities: list[str] = Field(default_factory=list, max_length=20)
+    agent_id: UUID | None = None
+    allowed_tools: list[str] | None = Field(default=None, max_length=100)
+    max_attempts: int = Field(default=1, ge=1, le=5)
+
+
+class MissionCreate(_Strict):
+    """Exactly one of `agent_id` (single task), `tasks` (explicit plan), `planner_agent_id`."""
+
+    objective: str = Field(min_length=1, max_length=10_000)
+    agent_id: UUID | None = None
+    tasks: list[TaskSpecIn] | None = Field(default=None, min_length=1, max_length=20)
+    planner_agent_id: UUID | None = None
+    tool_scope: list[str] | None = Field(default=None, max_length=100)
     budget_micro_usd: int = Field(gt=0)
     deadline: AwareDatetime | None = None
     constraints: list[str] = Field(default_factory=list, max_length=50)
@@ -61,17 +77,29 @@ class MissionCreate(_Strict):
 
 class TaskView(BaseModel):
     id: UUID
+    key: str
+    kind: str
     status: str
-    agent_id: UUID
+    agent_id: UUID | None
+    dependencies: list[UUID]
+    required_capabilities: list[str]
     allowed_tools: list[str]
+    attempts: int
+    max_attempts: int
 
     @classmethod
     def of(cls, task: Task) -> "TaskView":
         return cls(
             id=task.id,
+            key=task.key,
+            kind=task.kind.value,
             status=task.status.value,
             agent_id=task.agent_id,
+            dependencies=list(task.dependencies),
+            required_capabilities=list(task.required_capabilities),
             allowed_tools=list(task.allowed_tools),
+            attempts=task.attempts,
+            max_attempts=task.max_attempts,
         )
 
 

@@ -7,9 +7,15 @@ from fastapi import APIRouter, Request, status
 from forge.api.dependencies import clock, uow_factory
 from forge.api.schemas import EventView, MissionCreate, MissionView
 from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
+from forge.domain.plan import PlannedTask
 from forge.observability.logs import correlation_id
 from forge.observability.tracing import record_finished_mission
-from forge.orchestration.missions import MissionRequest, cancel_mission, submit_mission
+from forge.orchestration.missions import (
+    MissionRequest,
+    cancel_mission,
+    cancel_task,
+    submit_mission,
+)
 
 router = APIRouter(prefix="/missions", tags=["missions"])
 
@@ -23,6 +29,22 @@ async def create_mission(body: MissionCreate, request: Request) -> MissionView:
         MissionRequest(
             objective=body.objective,
             agent_id=body.agent_id,
+            planner_agent_id=body.planner_agent_id,
+            tasks=None
+            if body.tasks is None
+            else tuple(
+                PlannedTask(
+                    key=spec.key,
+                    objective=spec.objective,
+                    depends_on=tuple(spec.depends_on),
+                    required_capabilities=tuple(spec.required_capabilities),
+                    agent_id=spec.agent_id,
+                    allowed_tools=None if spec.allowed_tools is None else tuple(spec.allowed_tools),
+                    max_attempts=spec.max_attempts,
+                )
+                for spec in body.tasks
+            ),
+            tool_scope=None if body.tool_scope is None else tuple(body.tool_scope),
             budget=Budget(body.budget_micro_usd),
             deadline=body.deadline,
             constraints=tuple(body.constraints),
@@ -52,6 +74,16 @@ async def cancel(mission_id: UUID, request: Request) -> MissionView:
     async with uow_factory(request)() as uow:
         spent = await uow.executions.mission_spend(mission.id)
     record_finished_mission(mission, tasks, cost_micro_usd=spent)
+    return await _view(request, mission_id)
+
+
+@router.post("/{mission_id}/tasks/{task_id}/cancel")
+async def cancel_one_task(mission_id: UUID, task_id: UUID, request: Request) -> MissionView:
+    mission, tasks = await cancel_task(uow_factory(request), clock(request), mission_id, task_id)
+    if mission.status.is_terminal:
+        async with uow_factory(request)() as uow:
+            spent = await uow.executions.mission_spend(mission.id)
+        record_finished_mission(mission, tasks, cost_micro_usd=spent)
     return await _view(request, mission_id)
 
 

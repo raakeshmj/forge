@@ -59,6 +59,7 @@ async def test_submitting_a_mission_plans_one_ready_task(client: httpx2.AsyncCli
     assert [e["event_type"] for e in events] == [
         "mission.created",
         "task.created",
+        "task.routed",
         "mission.planned",
     ]
     assert {e["correlation_id"] for e in events} == {"req-42"}

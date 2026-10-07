@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-3 are implemented: a durable single-agent runtime with provider-aware inference, explicit context planning, provider-native prompt caching, and a secure tool runtime (registry, MCP, remote API tools). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-4 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -37,6 +37,12 @@ curl -s localhost:18000/missions/$mission | jq          # status, result, usage,
 curl -s localhost:18000/missions/$mission/events | jq   # the immutable event history
 curl -s -X POST localhost:18000/missions/$mission/cancel
 ```
+
+A mission is planned in one of three ways: `agent_id` (one task), `tasks` (an
+explicit graph of tasks with `key`, `depends_on`, `required_capabilities`), or
+`planner_agent_id` (a planner agent proposes the graph, which FORGE validates).
+Agents declare `capabilities`; tasks are routed to capable agents with the least
+work. `make e2e` includes a planned, fanned-out mission on the demo provider.
 
 The `demo` provider is a deterministic local model that simulates prefix caching.
 Agents can name Anthropic or OpenAI models (with `fallback_models`); the worker

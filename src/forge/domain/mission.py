@@ -32,7 +32,7 @@ _S = MissionStatus
 MISSION_TRANSITIONS: dict[MissionStatus, frozenset[MissionStatus]] = {
     _S.CREATED: frozenset({_S.PLANNING, _S.CANCELLED}),
     _S.PLANNING: frozenset({_S.READY, _S.FAILED, _S.CANCELLED}),
-    _S.READY: frozenset({_S.RUNNING, _S.CANCELLED}),
+    _S.READY: frozenset({_S.RUNNING, _S.FAILED, _S.CANCELLED}),  # FAILED: tasks cancelled first
     _S.RUNNING: frozenset({_S.PAUSED, _S.WAITING_APPROVAL, _S.FAILED, _S.COMPLETED, _S.CANCELLED}),
     _S.PAUSED: frozenset({_S.RUNNING, _S.CANCELLED}),
     _S.WAITING_APPROVAL: frozenset({_S.RUNNING, _S.CANCELLED}),
@@ -100,6 +100,7 @@ class Mission:
     correlation_id: str
     created_at: datetime
     updated_at: datetime
+    tool_scope: tuple[str, ...] | None = None  # upper bound on every task's tools (ADR 0006)
 
     def __post_init__(self) -> None:
         if not self.objective.strip():

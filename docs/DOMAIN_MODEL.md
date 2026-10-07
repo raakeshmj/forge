@@ -53,6 +53,7 @@ Any non-terminal state ----> CANCELLED
 Terminal states: COMPLETED, FAILED, CANCELLED.
 
 The complete transition table is `MISSION_TRANSITIONS` in `src/forge/domain/mission.py`; the database constrains status values.
+READY -> FAILED covers a mission whose tasks were cancelled before any ran.
 
 ---
 
@@ -101,8 +102,12 @@ Any non-terminal state ----> CANCELLED
 Terminal states: COMPLETED, FAILED, CANCELLED.
 
 The complete transition table is `TASK_TRANSITIONS` in `src/forge/domain/task.py`.
+RUNNING -> READY is a retry (a new execution attempt); PENDING -> FAILED means no
+eligible agent could be routed.
 
-Phase 1 tasks carry `mission_id`, `objective`, `agent_id`, `allowed_tools`, and `status`; dependencies and task-level budget, deadline, and risk arrive with multi-task orchestration (Phase 4).
+Tasks carry a `key`, `kind` (WORK or PLANNING), dependencies, required
+capabilities, `max_attempts`, and `attempts`. Budget, deadline, and risk are the
+mission's, shared by all tasks through budget reservations (`docs/decisions/0006`).
 
 ---
 

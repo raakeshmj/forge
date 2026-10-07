@@ -69,6 +69,7 @@ services:
       FORGE_DATABASE_URL: postgresql+psycopg://forge:${FORGE_POSTGRES_PASSWORD:-forge}@postgres:5432/forge
       FORGE_LOG_LEVEL: ${FORGE_LOG_LEVEL:-INFO}
       FORGE_WORKER_LEASE_SECONDS: ${FORGE_WORKER_LEASE_SECONDS:-30}
+      FORGE_WORKER_CONCURRENCY: ${FORGE_WORKER_CONCURRENCY:-4}
       # Simulated tool latency, used by the end-to-end interruption demo to kill mid-step.
       FORGE_DEMO_TOOL_DELAY_SECONDS: ${FORGE_DEMO_TOOL_DELAY_SECONDS:-0}
     depends_on:

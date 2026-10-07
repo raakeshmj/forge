@@ -34,6 +34,7 @@ class ModelProfile:
 
 
 DEMO_MODEL = ModelRef("demo", "demo-investigator-1")
+DEMO_PLANNER = ModelRef("demo", "demo-planner-1")
 
 
 def _usd(input_: float, output: float, cache_read: float, cache_write: float) -> ModelPrice:
@@ -53,6 +54,9 @@ PROFILES: Mapping[ModelRef, ModelProfile] = _profiles(
     # Deterministic local fake (forge.inference.demo) with simulated prefix caching.
     ModelProfile(
         DEMO_MODEL, 32_000, 2_048, _usd(1, 5, 0.1, 1.25), True, CachingMode.EXPLICIT, 256, 1
+    ),
+    ModelProfile(
+        DEMO_PLANNER, 32_000, 2_048, _usd(1, 5, 0.1, 1.25), True, CachingMode.EXPLICIT, 256, 1
     ),
     # Anthropic: cache writes are 1.25x input for the default 5-minute TTL.
     ModelProfile(

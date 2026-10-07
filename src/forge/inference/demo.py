@@ -1,6 +1,8 @@
 """A deterministic stand-in provider for demos and tests (ADR 0004).
 
-Mission -> Model (requests metrics.read) -> Tool -> Model (concludes) -> Result.
+`demo-investigator-1`: Model (requests metrics.read) -> Tool -> Model (concludes).
+`demo-planner-1`: answers a planning brief with a fixed incident-investigation plan
+(two parallel evidence tasks fanning in to a correlation task).
 It reports usage like a real provider, including explicit prefix caching: the
 prefix up to each cache breakpoint is hashed, and a prefix seen within the TTL
 is reported as cache_read_input_tokens, a new one as cache_creation_input_tokens.
@@ -23,11 +25,34 @@ from forge.domain.model import (
     ToolUseBlock,
     block_to_json,
 )
-from forge.inference.profiles import DEMO_MODEL, PROFILES
+from forge.inference.profiles import DEMO_MODEL, DEMO_PLANNER, PROFILES
 from forge.inference.tokens import estimate_text
 
 METRICS_TOOL = "metrics.read"
 CACHE_TTL_SECONDS = 300.0
+DEMO_PLAN = json.dumps(
+    {
+        "tasks": [
+            {
+                "key": "metrics",
+                "objective": "Measure checkout latency before and after the deployment.",
+                "required_capabilities": ["observability"],
+            },
+            {
+                "key": "changes",
+                "objective": "List what changed in the deployment that preceded the regression.",
+                "required_capabilities": ["change-management"],
+            },
+            {
+                "key": "correlate",
+                "objective": "Correlate the latency regression with the deployment changes.",
+                "depends_on": ["metrics", "changes"],
+                "required_capabilities": ["incident-response"],
+            },
+        ]
+    },
+    sort_keys=True,
+)
 
 
 class DemoInvestigationModel:
@@ -46,7 +71,10 @@ class DemoInvestigationModel:
         ]
         tool_names = {tool.name for tool in request.tools}
         content: tuple[ResponseBlock, ...]
-        if not results and METRICS_TOOL in tool_names:
+        if request.model == DEMO_PLANNER:
+            content = (TextBlock(DEMO_PLAN),)
+            stop_reason = "end_turn"
+        elif not results and METRICS_TOOL in tool_names:
             turn = sum(1 for message in request.messages if message.role is Role.ASSISTANT)
             content = (
                 TextBlock("Checking checkout latency around the latest deployment."),

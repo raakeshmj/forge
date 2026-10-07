@@ -21,6 +21,7 @@ async def register_agent(
     correlation_id: str | None,
     fallback_models: Sequence[ModelRef] = (),
     model_options: Mapping[str, JSONValue] | None = None,
+    capabilities: Sequence[str] = (),
 ) -> AgentVersion:
     now = clock.now()
     agent = Agent(id=uuid4(), name=name, current_version=1, created_at=now)
@@ -35,6 +36,7 @@ async def register_agent(
         created_at=now,
         fallback_models=tuple(fallback_models),
         model_options=dict(model_options or {}),
+        capabilities=tuple(sorted(set(capabilities))),
     )
     async with uow_factory() as uow:
         await uow.agents.add(agent, version)

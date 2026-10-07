@@ -12,12 +12,20 @@ _log = logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self, runtime: Runtime, *, poll_interval_seconds: float) -> None:
+    def __init__(
+        self, runtime: Runtime, *, poll_interval_seconds: float, concurrency: int = 1
+    ) -> None:
         self._rt = runtime
         self._poll_interval = poll_interval_seconds
+        self._concurrency = concurrency
 
     async def run_until(self, stop: asyncio.Event) -> None:
-        """Claim and run executions until `stop` is set. Cancelling releases the current lease."""
+        """Run `concurrency` claim loops until `stop` is set. Cancelling releases held leases."""
+        async with asyncio.TaskGroup() as group:
+            for _ in range(self._concurrency):
+                group.create_task(self._claim_loop(stop))
+
+    async def _claim_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             claim = await claim_next(self._rt)
             if claim is None:

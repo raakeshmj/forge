@@ -56,6 +56,12 @@ class Execution:
     failure_detail: str | None
     started_at: datetime
     completed_at: datetime | None
+    task_attempt: int = 1  # which attempt of its task this execution is (ADR 0006)
+
+    @property
+    def failure_is_retryable(self) -> bool:
+        """Whether running the task again could succeed and is safe (ADR 0006)."""
+        return self.failure_kind in _RETRYABLE_FAILURES
 
     def record_spend(self, usage: Usage, cost_micro_usd: int) -> "Execution":
         return replace(
@@ -89,3 +95,8 @@ class Execution:
             failure_detail=failure_detail,
             completed_at=now,
         )
+
+
+_RETRYABLE_FAILURES = frozenset(
+    {FailureKind.MODEL_FAILED, FailureKind.MAX_STEPS_EXCEEDED, FailureKind.RECOVERY_EXHAUSTED}
+)

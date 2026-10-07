@@ -23,6 +23,7 @@ async def create_agent(body: AgentCreate, request: Request) -> AgentCreated:
         fallback_models=[ModelRef(m.provider, m.name) for m in body.fallback_models],
         model_options=body.model_options,
         tools=body.tools,
+        capabilities=body.capabilities,
         correlation_id=correlation_id.get(),
     )
     return AgentCreated(agent_id=version.agent_id, version=version.version, version_id=version.id)

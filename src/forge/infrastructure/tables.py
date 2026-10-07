@@ -52,6 +52,7 @@ agent_versions = Table(
     _ts("created_at"),
     Column("fallback_models", JSONB, nullable=False),
     Column("model_options", JSONB, nullable=False),
+    Column("capabilities", JSONB, nullable=False),
 )
 
 missions = Table(
@@ -71,6 +72,7 @@ missions = Table(
     Column("correlation_id", Text, nullable=False),
     _ts("created_at"),
     _ts("updated_at"),
+    Column("tool_scope", JSONB, nullable=True),
 )
 
 tasks = Table(
@@ -80,11 +82,17 @@ tasks = Table(
     Column("version", Integer, nullable=False),
     _uuid("mission_id"),
     Column("objective", Text, nullable=False),
-    _uuid("agent_id"),
+    _uuid("agent_id", nullable=True),
     Column("allowed_tools", JSONB, nullable=False),
     Column("status", Text, nullable=False),
     _ts("created_at"),
     _ts("updated_at"),
+    Column("key", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("dependencies", JSONB, nullable=False),
+    Column("required_capabilities", JSONB, nullable=False),
+    Column("max_attempts", Integer, nullable=False),
+    Column("attempts", Integer, nullable=False),
 )
 
 executions = Table(
@@ -112,6 +120,7 @@ executions = Table(
     Column("failure_detail", Text, nullable=True),
     _ts("started_at"),
     _ts("completed_at", nullable=True),
+    Column("task_attempt", Integer, nullable=False),
 )
 
 checkpoints = Table(
@@ -174,4 +183,13 @@ tools = Table(
     Column("status", Text, nullable=False),
     Column("reason", Text, nullable=False),
     _ts("updated_at"),
+)
+
+budget_reservations = Table(
+    "budget_reservations",
+    metadata,
+    _uuid("execution_id", primary_key=True),
+    _uuid("mission_id"),
+    Column("amount_micro_usd", BigInteger, nullable=False),
+    _ts("created_at"),
 )

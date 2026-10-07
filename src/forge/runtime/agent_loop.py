@@ -36,10 +36,10 @@ from forge.domain.events import (
     ToolFailed,
 )
 from forge.domain.execution import Execution, ExecutionStatus, FailureKind
-from forge.domain.mission import Mission, MissionStatus
+from forge.domain.mission import Mission
 from forge.domain.model import ModelRequest, ModelResponse, Role, ToolResultBlock, ToolUseBlock
 from forge.domain.repositories import Clock, UnitOfWork, UnitOfWorkFactory
-from forge.domain.task import Task
+from forge.domain.task import Task, TaskStatus
 from forge.domain.tool import (
     InvocationStatus,
     ToolDefinition,
@@ -60,12 +60,15 @@ from forge.inference.router import RoutingDecision, route
 from forge.inference.tokens import estimate_messages
 from forge.observability import tracing
 from forge.observability.logs import correlation_id
-from forge.orchestration import missions
+from forge.orchestration import budget, missions
 from forge.tools import pipeline
 from forge.tools.base import Tool, ToolContext
 from forge.tools.search import loaded_tools
 
 _log = logging.getLogger(__name__)
+
+RESERVATION_WAIT_SECONDS = 60.0
+RESERVATION_POLL_SECONDS = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,9 +107,11 @@ async def claim_next(runtime: Runtime) -> Claim | None:
         task = await uow.tasks.lock_next_ready()
         if task is None:
             return None
+        if task.agent_id is None:  # READY tasks are always routed (database constraint)
+            raise RuntimeError(f"task {task.id} is READY but has no agent")
         version = await uow.agents.get_current_version(task.agent_id)
         mission = await uow.missions.get(task.mission_id)
-        initial = AgentState.initial(task.objective)
+        initial = AgentState.initial(await missions.task_brief(uow, task))
         decision, required_tokens = _route(runtime, version, task, mission, initial)
         execution = Execution(
             id=uuid4(),
@@ -124,6 +129,7 @@ async def claim_next(runtime: Runtime) -> Claim | None:
             failure_detail=None,
             started_at=now,
             completed_at=None,
+            task_attempt=task.attempts + 1,
         )
         fence = await uow.executions.add(
             execution, worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
@@ -256,9 +262,10 @@ class ExecutionRunner:
         while True:
             async with self._rt.uow_factory() as uow:
                 mission = await uow.missions.get(self._execution.mission_id)
+                task = await uow.tasks.get(self._execution.task_id)
                 spent = await uow.executions.mission_spend(mission.id)
-            if mission.status is MissionStatus.CANCELLED:
-                return await self._cancel()
+            if mission.status.is_terminal or task.status is TaskStatus.CANCELLED:
+                return await self._cancel()  # cancelled, or another task already decided it
             if mission.deadline_passed(self._rt.clock.now()):
                 return await self._fail(
                     FailureKind.DEADLINE_EXCEEDED, f"deadline {mission.deadline} passed"
@@ -311,6 +318,14 @@ class ExecutionRunner:
             plan, hints, messages, inputs=inputs, profile=profile, max_output_tokens=output_tokens
         )
         self._plan = plan
+        reserved = await self._reserve(
+            mission,
+            profile.price.cost_of(
+                Usage(input_tokens=plan.total_tokens, output_tokens=output_tokens)
+            ),
+        )
+        if reserved is not None:
+            return reserved
         turn = self._state.turns
         failures: list[DomainEvent] = []
         retry = policy.model_retry
@@ -617,6 +632,7 @@ class ExecutionRunner:
             )
             if ledger is not None:
                 await uow.tool_invocations.record_outcome(*ledger)
+            await budget.release(uow, execution.id)  # actual spend is now recorded
             await self._write_checkpoint(uow, state, sequence, events)
         self._state, self._execution, self._sequence = state, execution, sequence
 
@@ -646,6 +662,30 @@ class ExecutionRunner:
         )
         return await self._finish(self._execution.fail(kind, detail, self._rt.clock.now()), events)
 
+    async def _reserve(self, mission: Mission, worst_case: int) -> Execution | None:
+        """Reserve the next call's worst-case cost against the shared mission budget (ADR 0006).
+
+        If only other tasks' reservations stand in the way, wait for them to settle: their
+        actual spend is usually below their worst case. Fail only when spend alone leaves
+        no room, or the wait outlasts RESERVATION_WAIT_SECONDS.
+        """
+        deadline = time.monotonic() + RESERVATION_WAIT_SECONDS
+        while True:
+            async with self._rt.uow_factory() as uow:
+                granted, committed, limit = await budget.reserve(
+                    uow, mission.id, self._execution.id, worst_case, self._rt.clock.now()
+                )
+                spent = await uow.executions.mission_spend(mission.id)
+            if granted:
+                return None
+            if spent + worst_case > limit or time.monotonic() > deadline:
+                return await self._fail(
+                    FailureKind.BUDGET_EXCEEDED,
+                    f"next call may cost {worst_case} micro-USD; {committed} of {limit} "
+                    "already spent or reserved",
+                )
+            await asyncio.sleep(RESERVATION_POLL_SECONDS)
+
     async def _cancel(self) -> Execution:
         return await self._finish(self._execution.cancel(self._rt.clock.now()), ())
 
@@ -664,10 +704,12 @@ class ExecutionRunner:
         now = self._rt.clock.now()
         async with self._rt.uow_factory() as uow:
             mission = await missions.lock_mission(uow, final.mission_id)
-            cancelled = mission.status is MissionStatus.CANCELLED
-            if cancelled and final.status is not ExecutionStatus.CANCELLED:
+            task = await uow.tasks.get(final.task_id)
+            superseded = mission.status.is_terminal or task.status is TaskStatus.CANCELLED
+            if superseded and final.status is not ExecutionStatus.CANCELLED:
                 final = self._execution.cancel(now)
             await uow.executions.update(final, fence=self._fence, lease_seconds=0)
+            await budget.release(uow, final.id)
             if state is not None:
                 await self._write_checkpoint(uow, state, self._sequence + 1, events)
                 events = ()

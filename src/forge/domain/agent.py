@@ -66,6 +66,7 @@ class AgentVersion:
     tools: tuple[str, ...]
     created_at: datetime
     fallback_models: tuple[ModelRef, ...] = ()
+    capabilities: tuple[str, ...] = ()  # declared; measured competency arrives in Phase 6
     # Provider-specific parameters passed through untouched (CLAUDE.md §6).
     model_options: Mapping[str, JSONValue] = field(default_factory=dict)
 

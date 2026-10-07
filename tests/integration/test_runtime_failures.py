@@ -181,18 +181,34 @@ async def test_non_idempotent_tool_timeout_is_an_unknown_outcome(uow: UowFactory
 # --- Budget, deadline, step limit --------------------------------------------------------
 
 
-async def test_budget_stops_execution_before_the_next_step(uow: UowFactory) -> None:
+async def test_a_call_whose_worst_case_exceeds_the_budget_is_never_made(uow: UowFactory) -> None:
+    model = ScriptedModel(tool_call(), answer())
+    mission_id = await submit(uow, budget=CALL_COST)  # far below max_output_tokens' worst case
+
+    final = await run_next(runtime(uow, model, RecordingTool()))
+
+    assert final.failure_kind is FailureKind.BUDGET_EXCEEDED
+    assert model.requests == []  # refused before calling, so nothing was overspent
+    assert final.cost_micro_usd == 0
+    failed = await payloads(uow, mission_id, "mission.failed")
+    assert failed == [{"failure_kind": "BUDGET_EXCEEDED", "cost_micro_usd": 0}]
+
+
+async def test_budget_reservation_stops_the_next_call_once_spend_leaves_no_room(
+    uow: UowFactory,
+) -> None:
     tool = RecordingTool()
-    mission_id = await submit(uow, budget=CALL_COST)
+    policy = replace(FAST_POLICY, max_output_tokens=50)  # worst case per call is small
+    # Room for one call's worst case (~350), not for spend plus a second worst case.
+    limit = 450
+    await submit(uow, budget=limit, policy=policy)
 
     final = await run_next(runtime(uow, ScriptedModel(tool_call(), answer()), tool))
 
-    assert final.status is ExecutionStatus.FAILED
     assert final.failure_kind is FailureKind.BUDGET_EXCEEDED
-    assert final.cost_micro_usd == CALL_COST  # overspend is bounded by one call
-    assert tool.invocations == []
-    failed = await payloads(uow, mission_id, "mission.failed")
-    assert failed == [{"failure_kind": "BUDGET_EXCEEDED", "cost_micro_usd": CALL_COST}]
+    assert final.cost_micro_usd == CALL_COST + 7  # one call and its tool; never above budget
+    assert final.cost_micro_usd <= limit
+    assert len(tool.invocations) == 1
 
 
 async def test_passed_deadline_fails_without_calling_the_model(uow: UowFactory) -> None:

@@ -16,6 +16,7 @@ from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.model import ModelRequest, ModelResponse, TextBlock, ToolUseBlock
 from forge.domain.risk import RiskLevel
 from forge.domain.tool import Idempotency, ToolDefinition, ToolResult
+from forge.inference.client import ModelCallError, ModelClient
 from forge.inference.profiles import CachingMode, ModelProfile
 from forge.infrastructure.clock import SystemClock
 from forge.orchestration.agents import register_agent
@@ -136,7 +137,7 @@ class RecordingTool:
 
 def runtime(
     uow: UowFactory,
-    model: ScriptedModel,
+    model: ModelClient,
     *tools: Tool,
     worker_id: str = "w1",
     lease_seconds: float = 30.0,
@@ -195,3 +196,43 @@ async def expire_lease(engine: AsyncEngine, execution_id: UUID) -> None:
             text("UPDATE executions SET lease_expires_at = now() - interval '1s' WHERE id = :id"),
             {"id": execution_id},
         )
+
+
+class TaskAwareModel:
+    """Answers by task: the first line of a task's brief selects its behaviour.
+
+    Behaviours per task key (consumed in order): "fail" (permanent model error),
+    "crash" (SimulatedCrash), "parallel" (block until another call is in flight).
+    A planning brief is answered with `plan`.
+    """
+
+    def __init__(self, behaviours: dict[str, list[str]] | None = None, plan: str = "") -> None:
+        self._behaviours = behaviours or {}
+        self._plan = plan
+        self.calls: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self._peer = asyncio.Event()
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        first = request.messages[0].content[0]
+        key = first.text.splitlines()[0] if isinstance(first, TextBlock) else ""
+        self.calls.append(key)
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= 2:
+            self._peer.set()
+        try:
+            pending = self._behaviours.get(key, [])
+            behaviour = pending.pop(0) if pending else "ok"
+            if behaviour == "fail":
+                raise ModelCallError("rejected", retryable=False)
+            if behaviour == "crash":
+                raise SimulatedCrash
+            if behaviour == "parallel":
+                await asyncio.wait_for(self._peer.wait(), timeout=5)
+            if key.startswith("Plan this mission"):
+                return answer(self._plan)
+            return answer(f"result of {key}")
+        finally:
+            self.in_flight -= 1

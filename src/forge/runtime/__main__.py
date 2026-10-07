@@ -87,7 +87,11 @@ async def serve(settings: WorkerSettings) -> None:
         loop.add_signal_handler(sig, stop.set)
 
     worker = asyncio.create_task(
-        Worker(runtime, poll_interval_seconds=settings.poll_interval_seconds).run_until(stop)
+        Worker(
+            runtime,
+            poll_interval_seconds=settings.poll_interval_seconds,
+            concurrency=settings.concurrency,
+        ).run_until(stop)
     )
     await stop.wait()
     worker.cancel()  # abandons the in-flight step; its lease is released for another worker

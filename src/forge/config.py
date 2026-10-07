@@ -59,6 +59,7 @@ class WorkerSettings:
     demo_tool_delay_seconds: float
     database_url: str = field(repr=False)
     tool_config_path: str | None = None  # MCP servers and remote API tools (ADR 0005)
+    concurrency: int = 1  # parallel claim loops in this process (ADR 0006)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -66,6 +67,8 @@ class WorkerSettings:
         delay = reader.number("FORGE_DEMO_TOOL_DELAY_SECONDS", 0.0)
         if delay < 0:
             reader.errors.append("FORGE_DEMO_TOOL_DELAY_SECONDS must not be negative")
+        if not 1 <= reader.integer("FORGE_WORKER_CONCURRENCY", default=1) <= 64:
+            reader.errors.append("FORGE_WORKER_CONCURRENCY must be between 1 and 64")
         settings = cls(
             log_level=reader.log_level(),
             otel_exporter=reader.otel_exporter(),
@@ -77,6 +80,7 @@ class WorkerSettings:
             demo_tool_delay_seconds=delay,
             database_url=reader.required("FORGE_DATABASE_URL"),
             tool_config_path=reader.optional("FORGE_TOOL_CONFIG"),
+            concurrency=reader.integer("FORGE_WORKER_CONCURRENCY", default=1),
         )
         reader.raise_if_invalid()
         return settings
