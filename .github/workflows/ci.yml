@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, types, boundaries, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - run: make install
+      - run: make lint
+      - run: make typecheck
+      - run: make boundaries
+      - run: make test
+
+  integration:
+    name: Integration tests and migrations
+    runs-on: ubuntu-latest
+    services:
+      # Host ports match the Makefile defaults used by `make test-integration`.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: forge
+          POSTGRES_PASSWORD: forge
+          POSTGRES_DB: forge
+        ports: ["15432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U forge -d forge"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7.4-alpine
+        ports: ["16379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - run: make install
+      - run: make migrate
+      - run: make test-integration
+
+  compose:
+    name: Docker Compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make up
+      - name: Readiness reports every dependency ok
+        run: |
+          body=$(curl --fail --silent --show-error http://127.0.0.1:18000/health/ready)
+          echo "$body"
+          test "$(echo "$body" | jq -r .status)" = ready
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+      - if: always()
+        run: make down
