@@ -129,3 +129,9 @@ source_modules = [
 ]
 forbidden_modules = ["mcp"]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Evaluation reads outcomes; it does not drive execution or touch adapters"
+type = "forbidden"
+source_modules = ["forge.evaluation"]
+forbidden_modules = ["forge.runtime", "forge.api", "forge.infrastructure", "forge.tools"]

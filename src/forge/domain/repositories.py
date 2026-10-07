@@ -11,6 +11,13 @@ from uuid import UUID
 
 from forge.domain.agent import Agent, AgentVersion
 from forge.domain.checkpoint import Checkpoint
+from forge.domain.evaluation import (
+    Benchmark,
+    BenchmarkRun,
+    BenchmarkRunItem,
+    Evaluation,
+    ScopedResult,
+)
 from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution
 from forge.domain.mission import Mission
@@ -144,6 +151,38 @@ class ToolRegistryRepository(Protocol):
     async def save(self, tool: RegisteredTool) -> None: ...
 
 
+class EvaluationRepository(Protocol):
+    async def add(self, evaluation: Evaluation, *, trigger: str) -> bool:
+        """Persist; returns False if an automatic evaluation of the mission already exists."""
+        ...
+
+    async def list_for_mission(self, mission_id: UUID) -> list[Evaluation]: ...
+    async def missions_awaiting_evaluation(self, limit: int) -> list[UUID]:
+        """Terminal missions with no automatic evaluation yet, oldest first."""
+        ...
+
+    async def results_for_agent(self, agent_id: UUID) -> list[tuple[Evaluation, ScopedResult]]:
+        """Task-scope results attributed to an agent, oldest first (competency evidence)."""
+        ...
+
+
+class BenchmarkRepository(Protocol):
+    async def add(self, benchmark: Benchmark, now: datetime) -> None:
+        """Insert if this (name, version) is new; existing versions are immutable."""
+        ...
+
+    async def get(self, name: str, version: int | None = None) -> Benchmark:
+        """A specific version, or the latest when `version` is None."""
+        ...
+
+    async def list_all(self) -> list[Benchmark]: ...
+    async def add_run(self, run: BenchmarkRun, items: list[BenchmarkRunItem]) -> None: ...
+    async def get_run(self, run_id: UUID, *, for_update: bool = False) -> BenchmarkRun: ...
+    async def run_items(self, run_id: UUID) -> list[BenchmarkRunItem]: ...
+    async def item_for_mission(self, mission_id: UUID) -> BenchmarkRunItem | None: ...
+    async def complete_run(self, run: BenchmarkRun) -> None: ...
+
+
 class EventRepository(Protocol):
     async def append(
         self,
@@ -178,6 +217,10 @@ class UnitOfWork(Protocol):
     def tool_registry(self) -> ToolRegistryRepository: ...
     @property
     def budget(self) -> BudgetRepository: ...
+    @property
+    def evaluations(self) -> EvaluationRepository: ...
+    @property
+    def benchmarks(self) -> BenchmarkRepository: ...
 
     async def __aenter__(self) -> Self: ...
     async def __aexit__(

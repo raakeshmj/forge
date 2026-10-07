@@ -19,6 +19,20 @@ from forge.domain.agent import Agent, AgentVersion, ModelRef
 from forge.domain.checkpoint import AgentState, Checkpoint
 from forge.domain.common import JSONObject
 from forge.domain.cost import Usage
+from forge.domain.evaluation import (
+    Benchmark,
+    BenchmarkCase,
+    BenchmarkRun,
+    BenchmarkRunItem,
+    BenchmarkRunStatus,
+    Dimension,
+    DimensionResult,
+    Evaluation,
+    Expectations,
+    Finding,
+    Scope,
+    ScopedResult,
+)
 from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution, ExecutionStatus, FailureKind
 from forge.domain.mission import Budget, ExecutionPolicy, Mission, MissionStatus, RiskPolicy
@@ -64,6 +78,8 @@ class PostgresUnitOfWork:
         self.events = _Events(connection)
         self.tool_registry = _ToolRegistry(connection)
         self.budget = _Budget(connection)
+        self.evaluations = _Evaluations(connection)
+        self.benchmarks = _Benchmarks(connection)
         return self
 
     async def __aexit__(
@@ -822,3 +838,277 @@ class _Budget(_Repository):
                 t.budget_reservations.c.execution_id == execution_id
             )
         )
+
+
+# --- Evaluations -------------------------------------------------------------------------
+
+
+class _Evaluations(_Repository):
+    async def add(self, evaluation: Evaluation, *, trigger: str) -> bool:
+        try:
+            async with self._connection.begin_nested():
+                await self._connection.execute(
+                    insert(t.evaluations).values(
+                        id=evaluation.id,
+                        mission_id=evaluation.mission_id,
+                        evaluator_set=evaluation.evaluator_set,
+                        benchmark_case=evaluation.benchmark_case,
+                        trigger=trigger,
+                        cost_micro_usd=evaluation.cost_micro_usd,
+                        created_at=evaluation.created_at,
+                    )
+                )
+        except IntegrityError:
+            return False  # another worker already evaluated this mission automatically
+        if evaluation.results:
+            await self._connection.execute(
+                insert(t.evaluation_results),
+                [
+                    {
+                        "evaluation_id": evaluation.id,
+                        "scope": scoped.scope.value,
+                        "task_id": scoped.task_id,
+                        "agent_id": scoped.agent_id,
+                        "execution_id": scoped.execution_id,
+                        "dimension": scoped.result.dimension.value,
+                        "score": scoped.result.score,
+                        "confidence": scoped.result.confidence,
+                        "evaluator": scoped.result.evaluator,
+                        "findings": [
+                            {"code": f.code, "message": f.message, "refs": list(f.refs)}
+                            for f in scoped.result.findings
+                        ],
+                        "metrics": dict(scoped.result.metrics),
+                    }
+                    for scoped in evaluation.results
+                ],
+            )
+        return True
+
+    async def list_for_mission(self, mission_id: UUID) -> list[Evaluation]:
+        rows = await self._connection.execute(
+            select(t.evaluations)
+            .where(t.evaluations.c.mission_id == mission_id)
+            .order_by(t.evaluations.c.created_at)
+        )
+        return [await self._hydrate(row) for row in rows.fetchall()]
+
+    async def missions_awaiting_evaluation(self, limit: int) -> list[UUID]:
+        evaluated = (
+            select(t.evaluations.c.mission_id)
+            .where(t.evaluations.c.trigger == "auto")
+            .scalar_subquery()
+        )
+        rows = await self._connection.execute(
+            select(t.missions.c.id)
+            .where(
+                t.missions.c.status.in_(["COMPLETED", "FAILED", "CANCELLED"]),
+                t.missions.c.id.not_in(evaluated),
+            )
+            .order_by(t.missions.c.updated_at)
+            .limit(limit)
+        )
+        return [row[0] for row in rows]
+
+    async def results_for_agent(self, agent_id: UUID) -> list[tuple[Evaluation, ScopedResult]]:
+        rows = await self._connection.execute(
+            select(t.evaluations.c.id)
+            .join(t.evaluation_results, t.evaluation_results.c.evaluation_id == t.evaluations.c.id)
+            .where(
+                t.evaluation_results.c.agent_id == agent_id,
+                t.evaluation_results.c.scope == Scope.TASK.value,
+            )
+            .group_by(t.evaluations.c.id, t.evaluations.c.created_at)
+            .order_by(t.evaluations.c.created_at)
+        )
+        pairs: list[tuple[Evaluation, ScopedResult]] = []
+        for (evaluation_id,) in rows.fetchall():
+            row = (
+                await self._connection.execute(
+                    select(t.evaluations).where(t.evaluations.c.id == evaluation_id)
+                )
+            ).one()
+            evaluation = await self._hydrate(row)
+            pairs.extend(
+                (evaluation, scoped)
+                for scoped in evaluation.results
+                if scoped.agent_id == agent_id and scoped.scope is Scope.TASK
+            )
+        return pairs
+
+    async def _hydrate(self, row: Row[Any]) -> Evaluation:
+        results = await self._connection.execute(
+            select(t.evaluation_results)
+            .where(t.evaluation_results.c.evaluation_id == row.id)
+            .order_by(t.evaluation_results.c.id)
+        )
+        return Evaluation(
+            id=row.id,
+            mission_id=row.mission_id,
+            evaluator_set=row.evaluator_set,
+            benchmark_case=row.benchmark_case,
+            results=tuple(
+                ScopedResult(
+                    scope=Scope(r.scope),
+                    task_id=r.task_id,
+                    agent_id=r.agent_id,
+                    execution_id=r.execution_id,
+                    result=DimensionResult(
+                        dimension=Dimension(r.dimension),
+                        score=r.score,
+                        confidence=r.confidence,
+                        evaluator=r.evaluator,
+                        findings=tuple(
+                            Finding(f["code"], f["message"], tuple(f["refs"])) for f in r.findings
+                        ),
+                        metrics=r.metrics,
+                    ),
+                )
+                for r in results
+            ),
+            cost_micro_usd=row.cost_micro_usd,
+            created_at=row.created_at,
+        )
+
+
+# --- Benchmarks --------------------------------------------------------------------------
+
+
+class _Benchmarks(_Repository):
+    async def add(self, benchmark: Benchmark, now: datetime) -> None:
+        await self._connection.execute(
+            pg_insert(t.benchmarks)
+            .values(
+                name=benchmark.name,
+                version=benchmark.version,
+                capability=benchmark.capability,
+                description=benchmark.description,
+                cases=[_case_json(case) for case in benchmark.cases],
+                created_at=now,
+            )
+            .on_conflict_do_nothing()
+        )
+
+    async def get(self, name: str, version: int | None = None) -> Benchmark:
+        statement = select(t.benchmarks).where(t.benchmarks.c.name == name)
+        if version is None:
+            statement = statement.order_by(t.benchmarks.c.version.desc()).limit(1)
+        else:
+            statement = statement.where(t.benchmarks.c.version == version)
+        return _benchmark(await self._one(statement, "benchmark", f"{name}@{version or 'latest'}"))
+
+    async def list_all(self) -> list[Benchmark]:
+        rows = await self._connection.execute(
+            select(t.benchmarks).order_by(t.benchmarks.c.name, t.benchmarks.c.version)
+        )
+        return [_benchmark(row) for row in rows]
+
+    async def add_run(self, run: BenchmarkRun, items: list[BenchmarkRunItem]) -> None:
+        await self._connection.execute(
+            insert(t.benchmark_runs).values(
+                id=run.id,
+                benchmark=run.benchmark,
+                version=run.version,
+                agent_id=run.agent_id,
+                status=run.status.value,
+                summary=dict(run.summary),
+                created_at=run.created_at,
+                completed_at=run.completed_at,
+            )
+        )
+        await self._connection.execute(
+            insert(t.benchmark_run_items),
+            [
+                {"run_id": i.run_id, "case_key": i.case_key, "mission_id": i.mission_id}
+                for i in items
+            ],
+        )
+
+    async def get_run(self, run_id: UUID, *, for_update: bool = False) -> BenchmarkRun:
+        statement = select(t.benchmark_runs).where(t.benchmark_runs.c.id == run_id)
+        if for_update:
+            statement = statement.with_for_update()
+        row = await self._one(statement, "benchmark run", run_id)
+        return BenchmarkRun(
+            id=row.id,
+            benchmark=row.benchmark,
+            version=row.version,
+            agent_id=row.agent_id,
+            status=BenchmarkRunStatus(row.status),
+            summary=row.summary,
+            created_at=row.created_at,
+            completed_at=row.completed_at,
+        )
+
+    async def run_items(self, run_id: UUID) -> list[BenchmarkRunItem]:
+        rows = await self._connection.execute(
+            select(t.benchmark_run_items)
+            .where(t.benchmark_run_items.c.run_id == run_id)
+            .order_by(t.benchmark_run_items.c.case_key)
+        )
+        return [BenchmarkRunItem(r.run_id, r.case_key, r.mission_id) for r in rows]
+
+    async def item_for_mission(self, mission_id: UUID) -> BenchmarkRunItem | None:
+        row = (
+            await self._connection.execute(
+                select(t.benchmark_run_items).where(
+                    t.benchmark_run_items.c.mission_id == mission_id
+                )
+            )
+        ).first()
+        return None if row is None else BenchmarkRunItem(row.run_id, row.case_key, row.mission_id)
+
+    async def complete_run(self, run: BenchmarkRun) -> None:
+        await self._connection.execute(
+            update(t.benchmark_runs)
+            .where(t.benchmark_runs.c.id == run.id)
+            .values(
+                status=run.status.value, summary=dict(run.summary), completed_at=run.completed_at
+            )
+        )
+
+
+def _case_json(case: BenchmarkCase) -> dict[str, Any]:
+    e = case.expectations
+    return {
+        "key": case.key,
+        "objective": case.objective,
+        "required_capabilities": list(case.required_capabilities),
+        "difficulty": case.difficulty,
+        "risk": case.risk,
+        "expectations": {
+            "must_include": list(e.must_include),
+            "must_not_include": list(e.must_not_include),
+            "expected_tools": list(e.expected_tools),
+            "reference_evidence": list(e.reference_evidence),
+            "ideal_turns": e.ideal_turns,
+            "reference_cost_micro_usd": e.reference_cost_micro_usd,
+        },
+    }
+
+
+def _benchmark(row: Row[Any]) -> Benchmark:
+    return Benchmark(
+        name=row.name,
+        version=row.version,
+        capability=row.capability,
+        description=row.description,
+        cases=tuple(
+            BenchmarkCase(
+                key=c["key"],
+                objective=c["objective"],
+                required_capabilities=tuple(c["required_capabilities"]),
+                difficulty=c["difficulty"],
+                risk=c["risk"],
+                expectations=Expectations(
+                    must_include=tuple(c["expectations"]["must_include"]),
+                    must_not_include=tuple(c["expectations"]["must_not_include"]),
+                    expected_tools=tuple(c["expectations"]["expected_tools"]),
+                    reference_evidence=tuple(c["expectations"]["reference_evidence"]),
+                    ideal_turns=c["expectations"]["ideal_turns"],
+                    reference_cost_micro_usd=c["expectations"]["reference_cost_micro_usd"],
+                ),
+            )
+            for c in row.cases
+        ),
+    )

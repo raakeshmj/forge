@@ -190,6 +190,8 @@ A mission can dynamically distribute work among multiple agents.
 
 # PHASE 5 — EVALUATION
 
+Status: implemented. Decisions: `docs/decisions/0007`.
+
 ## Objective
 
 Measure agent behavior.

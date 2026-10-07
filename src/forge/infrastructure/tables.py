@@ -11,6 +11,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
+    Float,
     Integer,
     MetaData,
     Table,
@@ -192,4 +193,65 @@ budget_reservations = Table(
     _uuid("mission_id"),
     Column("amount_micro_usd", BigInteger, nullable=False),
     _ts("created_at"),
+)
+
+evaluations = Table(
+    "evaluations",
+    metadata,
+    _uuid("id", primary_key=True),
+    _uuid("mission_id"),
+    Column("evaluator_set", Text, nullable=False),
+    Column("benchmark_case", Text, nullable=True),
+    Column("trigger", Text, nullable=False),
+    Column("cost_micro_usd", BigInteger, nullable=False),
+    _ts("created_at"),
+)
+
+evaluation_results = Table(
+    "evaluation_results",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    _uuid("evaluation_id"),
+    Column("scope", Text, nullable=False),
+    _uuid("task_id", nullable=True),
+    _uuid("agent_id", nullable=True),
+    _uuid("execution_id", nullable=True),
+    Column("dimension", Text, nullable=False),
+    Column("score", Float, nullable=True),
+    Column("confidence", Float, nullable=False),
+    Column("evaluator", Text, nullable=False),
+    Column("findings", JSONB, nullable=False),
+    Column("metrics", JSONB, nullable=False),
+)
+
+benchmarks = Table(
+    "benchmarks",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("version", Integer, primary_key=True),
+    Column("capability", Text, nullable=False),
+    Column("description", Text, nullable=False),
+    Column("cases", JSONB, nullable=False),
+    _ts("created_at"),
+)
+
+benchmark_runs = Table(
+    "benchmark_runs",
+    metadata,
+    _uuid("id", primary_key=True),
+    Column("benchmark", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    _uuid("agent_id"),
+    Column("status", Text, nullable=False),
+    Column("summary", JSONB, nullable=False),
+    _ts("created_at"),
+    _ts("completed_at", nullable=True),
+)
+
+benchmark_run_items = Table(
+    "benchmark_run_items",
+    metadata,
+    _uuid("run_id", primary_key=True),
+    Column("case_key", Text, primary_key=True),
+    _uuid("mission_id"),
 )

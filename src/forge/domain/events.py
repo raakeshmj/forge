@@ -344,3 +344,23 @@ class ToolPinned(DomainEvent):
     name: str
     version: str
     definition_sha256: str
+
+
+# --- Evaluation --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationStarted(DomainEvent):
+    aggregate_type = "evaluation"
+    event_type = "evaluation.started"
+    evaluator_set: str
+    trigger: str
+    benchmark_case: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationCompleted(DomainEvent):
+    aggregate_type = "evaluation"
+    event_type = "evaluation.completed"
+    scores: tuple[str, ...]  # "dimension=score" at mission scope; "dimension=none" if unscored
+    cost_micro_usd: int

@@ -25,6 +25,12 @@ FORGE evaluates at:
 5. system level
 6. learning level
 
+Implemented (`docs/decisions/0007`): every finished mission is evaluated
+automatically on all eight dimensions, per task and for the mission, by
+deterministic evaluators; tool-level measurements appear as findings and
+metrics. System level is benchmark runs; learning level is Phase 7. A dimension
+without enough information is left unscored rather than guessed.
+
 ---
 
 # 3. TOOL EVALUATION
@@ -212,6 +218,10 @@ Benchmarks should contain:
 - reference evidence
 
 Benchmarks must be versioned.
+
+Implemented as immutable `(name, version)` datasets; runs report pass rate, mean
+score per dimension, expected calibration error, and cost per success
+(`src/forge/evaluation/benchmarks.py`).
 
 ---
 

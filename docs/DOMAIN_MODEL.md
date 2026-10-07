@@ -396,6 +396,10 @@ Dimensions:
 - safety
 - cost_efficiency
 
+Each dimension result carries a score (or none), the evaluator's confidence,
+the evaluator's name and version, structured findings that reference the
+trajectory, and raw metrics. Evaluations are append-only (`docs/decisions/0007`).
+
 ---
 
 # 18. BENCHMARK

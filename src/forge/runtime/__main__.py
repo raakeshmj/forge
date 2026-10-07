@@ -3,11 +3,14 @@
 import asyncio
 import os
 import signal
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
 
 from forge.config import WorkerSettings
+from forge.evaluation import benchmarks
+from forge.evaluation import worker as evaluation_worker
 from forge.inference.anthropic_client import AnthropicModelClient
 from forge.inference.client import ModelClient
 from forge.inference.demo import DemoInvestigationModel
@@ -86,12 +89,18 @@ async def serve(settings: WorkerSettings) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
+    await benchmarks.register_builtin(uow_factory, clock)
     worker = asyncio.create_task(
-        Worker(
-            runtime,
-            poll_interval_seconds=settings.poll_interval_seconds,
-            concurrency=settings.concurrency,
-        ).run_until(stop)
+        _run_all(
+            Worker(
+                runtime,
+                poll_interval_seconds=settings.poll_interval_seconds,
+                concurrency=settings.concurrency,
+            ).run_until(stop),
+            evaluation_worker.run_until(
+                uow_factory, clock, stop, poll_interval_seconds=settings.poll_interval_seconds
+            ),
+        )
     )
     await stop.wait()
     worker.cancel()  # abandons the in-flight step; its lease is released for another worker
@@ -102,6 +111,12 @@ async def serve(settings: WorkerSettings) -> None:
     finally:
         await stack.aclose()
         await engine.dispose()
+
+
+async def _run_all(*loops: Coroutine[Any, Any, None]) -> None:
+    async with asyncio.TaskGroup() as group:
+        for loop in loops:
+            group.create_task(loop)
 
 
 def main() -> None:
