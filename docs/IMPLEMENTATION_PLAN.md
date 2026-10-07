@@ -12,6 +12,8 @@ Each phase must leave the repository working.
 
 # PHASE 0 — FOUNDATION
 
+Status: implemented. Stack decisions: `docs/decisions/0001-foundation-stack-and-boundary-enforcement.md`.
+
 ## Objective
 
 Create the engineering foundation.

@@ -567,6 +567,10 @@ Redis is used for:
 
 PostgreSQL remains authoritative for durable domain state.
 
+Schema changes are hand-written Alembic migrations (`docs/decisions/0001`).
+
+Redis runs without persistence, so nothing authoritative can depend on it.
+
 ---
 
 # 21. FUTURE DISTRIBUTION
