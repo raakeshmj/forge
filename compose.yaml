@@ -36,14 +36,24 @@ services:
       timeout: 3s
       retries: 30
 
-  api:
+  migrate:
     build: .
+    image: forge:dev
+    command: ["alembic", "upgrade", "head"]
+    environment: *forge-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: forge:dev
     environment: *forge-env
     ports:
       - "127.0.0.1:${FORGE_API_HOST_PORT:-18000}:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:

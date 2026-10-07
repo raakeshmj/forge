@@ -1,5 +1,5 @@
 # Canonical development commands. CI runs these same targets.
-.PHONY: install format lint typecheck boundaries test test-integration check up down
+.PHONY: install format lint typecheck boundaries test test-integration check up down migrate migration
 
 # Defaults point at the services started by `make up` (see compose.yaml host ports).
 FORGE_DATABASE_URL ?= postgresql+psycopg://forge:forge@127.0.0.1:15432/forge
@@ -36,3 +36,10 @@ up:  ## Build and start the full stack, waiting until healthy
 
 down:  ## Stop the stack and delete its volumes
 	docker compose down -v
+
+migrate:  ## Apply migrations to the database at FORGE_DATABASE_URL
+	$(SERVICE_ENV) uv run alembic upgrade head
+
+migration:  ## Create a hand-written migration: make migration m="add missions table"
+	@test -n "$(m)" || (echo 'usage: make migration m="description"' && exit 1)
+	uv run alembic revision -m "$(m)"

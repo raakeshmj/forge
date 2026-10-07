@@ -17,6 +17,7 @@ FROM python:3.12-slim-bookworm AS runtime
 RUN useradd --system --uid 10001 --no-create-home forge
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
+COPY alembic.ini ./
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     FORGE_API_HOST=0.0.0.0 \
