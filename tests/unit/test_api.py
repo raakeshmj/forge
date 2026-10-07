@@ -2,13 +2,17 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from forge.api.app import create_app
 from forge.api.correlation import CORRELATION_HEADER
+from forge.domain.repositories import UnitOfWork
 from forge.health import DependencyCheck, DependencyUnavailableError
+from forge.infrastructure.clock import SystemClock
 from forge.observability.logs import CorrelationIdFilter
 
 
@@ -39,8 +43,22 @@ def _unavailable(name: str) -> Callable[[], None]:
     return fail
 
 
+def _no_database() -> UnitOfWork:
+    raise AssertionError("health endpoints must not touch the database")
+
+
+def _app(*checks: DependencyCheck, timeout: float = 1.0, **kwargs: Any) -> FastAPI:
+    return create_app(
+        uow_factory=_no_database,
+        clock=SystemClock(),
+        readiness_checks=checks,
+        readiness_timeout_seconds=timeout,
+        **kwargs,
+    )
+
+
 def _client(*checks: DependencyCheck, timeout: float = 1.0) -> TestClient:
-    return TestClient(create_app(readiness_checks=checks, readiness_timeout_seconds=timeout))
+    return TestClient(_app(*checks, timeout=timeout))
 
 
 def test_liveness_reports_ok_without_consulting_dependencies() -> None:
@@ -99,7 +117,7 @@ def test_shutdown_releases_resources() -> None:
     async def release() -> None:
         released.append("engine")
 
-    app = create_app(readiness_checks=(), readiness_timeout_seconds=1.0, on_shutdown=(release,))
+    app = _app(on_shutdown=(release,))
     with TestClient(app):
         assert released == []
 

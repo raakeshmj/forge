@@ -5,6 +5,7 @@ All repositories of one `UnitOfWork` share a transaction: it commits when the
 """
 
 from datetime import datetime
+from types import TracebackType
 from typing import Protocol, Self
 from uuid import UUID
 
@@ -22,6 +23,13 @@ class NotFoundError(LookupError):
         super().__init__(f"{entity} {entity_id} not found")
         self.entity = entity
         self.entity_id = entity_id
+
+
+class AlreadyExistsError(ValueError):
+    def __init__(self, entity: str, key: object) -> None:
+        super().__init__(f"{entity} {key!r} already exists")
+        self.entity = entity
+        self.key = key
 
 
 class ConcurrentUpdateError(RuntimeError):
@@ -120,16 +128,28 @@ class EventRepository(Protocol):
 
 
 class UnitOfWork(Protocol):
-    agents: AgentRepository
-    missions: MissionRepository
-    tasks: TaskRepository
-    executions: ExecutionRepository
-    checkpoints: CheckpointRepository
-    tool_invocations: ToolInvocationRepository
-    events: EventRepository
+    @property
+    def agents(self) -> AgentRepository: ...
+    @property
+    def missions(self) -> MissionRepository: ...
+    @property
+    def tasks(self) -> TaskRepository: ...
+    @property
+    def executions(self) -> ExecutionRepository: ...
+    @property
+    def checkpoints(self) -> CheckpointRepository: ...
+    @property
+    def tool_invocations(self) -> ToolInvocationRepository: ...
+    @property
+    def events(self) -> EventRepository: ...
 
     async def __aenter__(self) -> Self: ...
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
 
 
 class UnitOfWorkFactory(Protocol):

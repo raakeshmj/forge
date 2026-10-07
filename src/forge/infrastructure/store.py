@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Row, and_, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
 
 from forge.domain.agent import Agent, AgentVersion, ModelRef
@@ -20,7 +21,12 @@ from forge.domain.cost import Usage
 from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution, ExecutionStatus, FailureKind
 from forge.domain.mission import Budget, ExecutionPolicy, Mission, MissionStatus, RiskPolicy
-from forge.domain.repositories import ConcurrentUpdateError, LeaseLostError, NotFoundError
+from forge.domain.repositories import (
+    AlreadyExistsError,
+    ConcurrentUpdateError,
+    LeaseLostError,
+    NotFoundError,
+)
 from forge.domain.risk import RiskLevel
 from forge.domain.task import Task, TaskStatus
 from forge.domain.tool import InvocationStatus, ToolInvocation
@@ -81,14 +87,19 @@ class _Repository:
 
 class _Agents(_Repository):
     async def add(self, agent: Agent, version: AgentVersion) -> None:
-        await self._connection.execute(
-            insert(t.agents).values(
-                id=agent.id,
-                name=agent.name,
-                current_version=agent.current_version,
-                created_at=agent.created_at,
-            )
-        )
+        # A savepoint keeps the caller's transaction usable if the name is taken.
+        try:
+            async with self._connection.begin_nested():
+                await self._connection.execute(
+                    insert(t.agents).values(
+                        id=agent.id,
+                        name=agent.name,
+                        current_version=agent.current_version,
+                        created_at=agent.created_at,
+                    )
+                )
+        except IntegrityError as exc:
+            raise AlreadyExistsError("agent", agent.name) from exc
         await self._connection.execute(
             insert(t.agent_versions).values(
                 id=version.id,
