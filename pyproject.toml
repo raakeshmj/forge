@@ -135,3 +135,12 @@ name = "Evaluation reads outcomes; it does not drive execution or touch adapters
 type = "forbidden"
 source_modules = ["forge.evaluation"]
 forbidden_modules = ["forge.runtime", "forge.api", "forge.infrastructure", "forge.tools"]
+
+[[tool.importlinter.contracts]]
+name = "The Capability Engine reads evidence; it never drives execution or evaluation"
+type = "forbidden"
+source_modules = ["forge.capabilities"]
+forbidden_modules = [
+    "forge.runtime", "forge.api", "forge.infrastructure", "forge.tools", "forge.evaluation",
+    "forge.orchestration",
+]

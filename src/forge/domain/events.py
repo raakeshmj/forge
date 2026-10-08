@@ -364,3 +364,18 @@ class EvaluationCompleted(DomainEvent):
     event_type = "evaluation.completed"
     scores: tuple[str, ...]  # "dimension=score" at mission scope; "dimension=none" if unscored
     cost_micro_usd: int
+
+
+# --- Capability engine -------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CompetencyUpdated(DomainEvent):
+    aggregate_type = "competency"
+    event_type = "competency.updated"
+    agent_id: UUID
+    capability: str
+    estimated_score: float
+    uncertainty: float
+    sample_count: int
+    evaluation_id: UUID

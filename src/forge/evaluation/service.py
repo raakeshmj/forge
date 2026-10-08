@@ -3,6 +3,7 @@
 import logging
 from uuid import UUID, uuid4
 
+from forge.capabilities import engine
 from forge.domain.common import DomainError
 from forge.domain.evaluation import (
     Dimension,
@@ -103,6 +104,8 @@ async def evaluate_mission(
             ),
             correlation_id=loaded.mission.correlation_id,
         )
+        for agent_id in sorted({r.agent_id for r in evaluation.results if r.agent_id is not None}):
+            await engine.recompute_agent(uow, agent_id, clock.now(), trigger=evaluation.id)
         await benchmarks.settle_run_if_done(uow, mission_id, clock.now())
     _log.info("mission evaluated", extra={"mission_id": str(mission_id), "trigger": trigger})
     return evaluation

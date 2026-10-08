@@ -8,6 +8,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
+from forge.capabilities import engine as capability_engine
 from forge.config import WorkerSettings
 from forge.evaluation import benchmarks
 from forge.evaluation import worker as evaluation_worker
@@ -90,6 +91,7 @@ async def serve(settings: WorkerSettings) -> None:
         loop.add_signal_handler(sig, stop.set)
 
     await benchmarks.register_builtin(uow_factory, clock)
+    await capability_engine.register_builtin(uow_factory, clock)
     worker = asyncio.create_task(
         _run_all(
             Worker(

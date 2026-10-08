@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -236,3 +236,21 @@ class TaskAwareModel:
             return answer(f"result of {key}")
         finally:
             self.in_flight -= 1
+
+
+class OracleInvestigator:
+    """Investigates the service named in the objective and answers correctly (a strong agent)."""
+
+    ANSWERS: ClassVar[dict[str, str]] = {
+        "checkout": "Checkout latency regressed after the deploy: p95 880ms. Confidence: 0.9",
+        "payments": "Payments: no regression after the deploy (191ms). Confidence: 0.9",
+        "inventory": "Inventory spiked at 09:00 to 640ms, before the deploy. Confidence: 0.9",
+    }
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        first = request.messages[0].content[0]
+        objective = first.text.lower() if isinstance(first, TextBlock) else ""
+        service = next((s for s in self.ANSWERS if s in objective), "checkout")
+        if len(request.messages) == 1:
+            return tool_call(service=service, metric="latency_p95_ms")
+        return answer(self.ANSWERS[service])

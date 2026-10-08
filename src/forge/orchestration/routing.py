@@ -1,7 +1,9 @@
-"""Agent routing: which agent performs a task (ARCHITECTURE §8, ADR 0006).
+"""Agent routing: which agent performs a task (ARCHITECTURE §8, ADR 0006, ADR 0008).
 
-Phase 4 routes on declared capabilities and current workload; Phase 6 replaces
-the scoring with measured competency. Every decision records its alternatives.
+Eligibility comes from the capability graph; among eligible agents the one with
+the highest task fitness wins: measured competency and reliability (optimistic
+bounds for low-risk work, pessimistic for riskier work), cost, latency, and
+workload. Every decision records each candidate's fitness breakdown.
 """
 
 from collections.abc import Mapping, Sequence
@@ -9,23 +11,39 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from forge.domain.agent import Agent, AgentVersion
+from forge.domain.capability import (
+    GENERAL,
+    Candidate,
+    CapabilityGraph,
+    Competency,
+    Reliability,
+    fitness,
+    prior,
+)
 from forge.domain.task import Task
 
 
 @dataclass(frozen=True, slots=True)
 class AgentRouting:
     agent_id: UUID | None
-    candidates: tuple[str, ...]  # "agent-name: reason", best first
+    candidates: tuple[str, ...]  # best first, then rejected agents with reasons
 
     @property
     def explanation(self) -> str:
         return "; ".join(self.candidates) or "no agents registered"
 
 
+@dataclass(frozen=True, slots=True)
+class RoutingEvidence:
+    graph: CapabilityGraph
+    competencies: Mapping[tuple[UUID, str], Competency]
+    reliability: Mapping[UUID, Reliability]
+    workload: Mapping[UUID, int]
+    optimistic: bool  # low-risk missions explore uncertain agents
+
+
 def route_task(
-    task: Task,
-    agents: Sequence[tuple[Agent, AgentVersion]],
-    workload: Mapping[UUID, int],
+    task: Task, agents: Sequence[tuple[Agent, AgentVersion]], evidence: RoutingEvidence
 ) -> AgentRouting:
     if task.agent_id is not None:  # assigned by the operator's plan
         by_id = {agent.id: agent for agent, _ in agents}
@@ -34,17 +52,32 @@ def route_task(
         label = named.name if named else str(task.agent_id)
         return AgentRouting(task.agent_id if named else None, (f"{label}: {reason}",))
 
-    required = set(task.required_capabilities)
-    eligible: list[tuple[int, str, Agent]] = []
+    required = task.required_capabilities or (GENERAL,)
+    candidates: list[Candidate] = []
     rejected: list[str] = []
     for agent, version in agents:
-        missing = required - set(version.capabilities)
+        missing = [
+            c
+            for c in task.required_capabilities
+            if not evidence.graph.serves(version.capabilities, c)
+        ]
         if missing:
-            rejected.append(f"{agent.name}: lacks {sorted(missing)}")
-        else:
-            eligible.append((workload.get(agent.id, 0), agent.name, agent))
-    eligible.sort(key=lambda item: (item[0], item[1]))
-    ranked = [f"{name}: eligible, workload {load}" for load, name, _ in eligible]
-    if eligible:
-        ranked[0] = ranked[0].replace("eligible", "selected", 1)
-    return AgentRouting(eligible[0][2].id if eligible else None, (*ranked, *sorted(rejected)))
+            rejected.append(f"{agent.name}: cannot serve {missing}")
+            continue
+        candidates.append(
+            Candidate(
+                agent_id=agent.id,
+                name=agent.name,
+                competencies={
+                    c: evidence.competencies.get((agent.id, c), prior(agent.id, c))
+                    for c in required
+                },
+                reliability=evidence.reliability.get(agent.id, Reliability()),
+                workload=evidence.workload.get(agent.id, 0),
+            )
+        )
+    ranked = fitness(candidates, optimistic=evidence.optimistic)
+    described = [f.describe() for f in ranked]
+    if described:
+        described[0] = "selected " + described[0]
+    return AgentRouting(ranked[0].agent_id if ranked else None, (*described, *sorted(rejected)))

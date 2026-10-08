@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-5 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission and versioned benchmarks. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-6 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, and capability-aware routing on measured competency. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -48,6 +48,10 @@ Workers evaluate every finished mission on eight dimensions
 (`GET /missions/{id}/evaluations`). `POST /benchmarks/incident-investigation/runs`
 with an `agent_id` measures that agent against ground truth
 (`GET /benchmark-runs/{id}` for the summary).
+
+Evaluations feed per-capability competency estimates with uncertainty
+(`GET /agents/{id}`); routing prefers measured ability, reliability, cost, and
+latency over declarations alone. `GET /capabilities` shows the capability graph.
 
 The `demo` provider is a deterministic local model that simulates prefix caching.
 Agents can name Anthropic or OpenAI models (with `fallback_models`); the worker

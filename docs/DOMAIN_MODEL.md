@@ -173,7 +173,9 @@ Fields:
 - parent_id
 - prerequisites
 
-Capabilities form a directed graph.
+Capabilities form a directed graph. An agent serves a capability it declares or
+that one of its declared capabilities descends from, given its prerequisites
+(`docs/decisions/0008`).
 
 ---
 
@@ -193,6 +195,11 @@ Fields:
 - supporting_evaluations
 
 Competency must be derived from evidence.
+
+Implemented as a Beta-Bernoulli estimate recomputed from task evaluations,
+weighted by evaluator confidence, recency (14-day half-life), and difficulty;
+the record keeps estimate, uncertainty, sample and effective counts, trend,
+calibration, and supporting evaluations (`docs/decisions/0008`).
 
 ---
 

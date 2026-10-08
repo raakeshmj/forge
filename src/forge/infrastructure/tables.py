@@ -255,3 +255,31 @@ benchmark_run_items = Table(
     Column("case_key", Text, primary_key=True),
     _uuid("mission_id"),
 )
+
+capabilities = Table(
+    "capabilities",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("description", Text, nullable=False),
+    Column("parent", Text, nullable=True),
+    Column("prerequisites", JSONB, nullable=False),
+    Column("related", JSONB, nullable=False),
+    Column("required_tools", JSONB, nullable=False),
+    _ts("created_at"),
+)
+
+competencies = Table(
+    "competencies",
+    metadata,
+    _uuid("agent_id", primary_key=True),
+    Column("capability", Text, primary_key=True),
+    Column("alpha", Float, nullable=False),
+    Column("beta", Float, nullable=False),
+    Column("sample_count", Integer, nullable=False),
+    Column("effective_samples", Float, nullable=False),
+    Column("recent_trend", Float, nullable=True),
+    Column("calibration", Float, nullable=True),
+    _ts("last_evaluated", nullable=True),
+    Column("supporting_evaluations", JSONB, nullable=False),
+    _ts("updated_at"),
+)

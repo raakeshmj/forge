@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
 
 from forge.domain.agent import Agent, AgentVersion, ModelRef
+from forge.domain.capability import Capability, CapabilityGraph, Competency, Reliability
 from forge.domain.checkpoint import AgentState, Checkpoint
 from forge.domain.common import JSONObject
 from forge.domain.cost import Usage
@@ -80,6 +81,8 @@ class PostgresUnitOfWork:
         self.budget = _Budget(connection)
         self.evaluations = _Evaluations(connection)
         self.benchmarks = _Benchmarks(connection)
+        self.capabilities = _Capabilities(connection)
+        self.competencies = _Competencies(connection)
         return self
 
     async def __aexit__(
@@ -499,6 +502,20 @@ class _Executions(_Repository):
             )
         ).first()
         return None if row is None else _execution(row)
+
+    async def reliability(self, agent_ids: list[UUID]) -> dict[UUID, Reliability]:
+        if not agent_ids:
+            return {}
+        rows = await self._connection.execute(_RELIABILITY, {"agent_ids": agent_ids})
+        return {
+            row.agent_id: Reliability(
+                successes=int(row.successes),
+                failures=int(row.failures),
+                mean_cost_micro_usd=None if row.mean_cost is None else float(row.mean_cost),
+                mean_latency_ms=None if row.mean_latency is None else float(row.mean_latency),
+            )
+            for row in rows
+        }
 
     @staticmethod
     def _held(execution_id: UUID, fence: int) -> tuple[Any, ...]:
@@ -1112,3 +1129,105 @@ def _benchmark(row: Row[Any]) -> Benchmark:
             for c in row.cases
         ),
     )
+
+
+# Failures attributable to the agent; budget, deadline, cancellation, and routing are not.
+_RELIABILITY = text(
+    """
+    SELECT e.agent_id,
+           count(*) FILTER (WHERE e.status = 'COMPLETED') AS successes,
+           count(*) FILTER (WHERE e.status = 'FAILED' AND e.failure_kind IN
+               ('MODEL_FAILED', 'MAX_STEPS_EXCEEDED', 'TOOL_OUTCOME_UNKNOWN',
+                'RECOVERY_EXHAUSTED')) AS failures,
+           avg(e.cost_micro_usd) FILTER (WHERE e.status = 'COMPLETED') AS mean_cost,
+           (SELECT avg((ev.payload->>'latency_ms')::float)
+              FROM events ev JOIN executions x ON x.id = ev.aggregate_id
+             WHERE ev.event_type = 'model.called' AND x.agent_id = e.agent_id) AS mean_latency
+      FROM executions e
+     WHERE e.agent_id = ANY(:agent_ids)
+     GROUP BY e.agent_id
+    """
+)
+
+
+# --- Capabilities ------------------------------------------------------------------------
+
+
+class _Capabilities(_Repository):
+    async def save(self, capability: Capability, now: datetime) -> None:
+        values = {
+            "description": capability.description,
+            "parent": capability.parent,
+            "prerequisites": list(capability.prerequisites),
+            "related": list(capability.related),
+            "required_tools": list(capability.required_tools),
+        }
+        await self._connection.execute(
+            pg_insert(t.capabilities)
+            .values(name=capability.name, created_at=now, **values)
+            .on_conflict_do_update(index_elements=[t.capabilities.c.name], set_=values)
+        )
+
+    async def graph(self) -> CapabilityGraph:
+        rows = await self._connection.execute(
+            select(t.capabilities).order_by(t.capabilities.c.name)
+        )
+        return CapabilityGraph(
+            {
+                row.name: Capability(
+                    name=row.name,
+                    description=row.description,
+                    parent=row.parent,
+                    prerequisites=tuple(row.prerequisites),
+                    related=tuple(row.related),
+                    required_tools=tuple(row.required_tools),
+                )
+                for row in rows
+            }
+        )
+
+
+class _Competencies(_Repository):
+    async def save(self, competency: Competency, now: datetime) -> None:
+        values = {
+            "alpha": competency.alpha,
+            "beta": competency.beta,
+            "sample_count": competency.sample_count,
+            "effective_samples": competency.effective_samples,
+            "recent_trend": competency.recent_trend,
+            "calibration": competency.calibration,
+            "last_evaluated": competency.last_evaluated,
+            "supporting_evaluations": [str(e) for e in competency.supporting_evaluations],
+            "updated_at": now,
+        }
+        await self._connection.execute(
+            pg_insert(t.competencies)
+            .values(agent_id=competency.agent_id, capability=competency.capability, **values)
+            .on_conflict_do_update(
+                index_elements=[t.competencies.c.agent_id, t.competencies.c.capability], set_=values
+            )
+        )
+
+    async def for_agents(self, agent_ids: list[UUID]) -> list[Competency]:
+        if not agent_ids:
+            return []
+        rows = await self._connection.execute(
+            select(t.competencies)
+            .where(t.competencies.c.agent_id.in_(agent_ids))
+            .order_by(t.competencies.c.agent_id, t.competencies.c.capability)
+        )
+        return [
+            Competency(
+                agent_id=row.agent_id,
+                capability=row.capability,
+                alpha=row.alpha,
+                beta=row.beta,
+                sample_count=row.sample_count,
+                effective_samples=row.effective_samples,
+                recent_trend=row.recent_trend,
+                calibration=row.calibration,
+                last_evaluated=row.last_evaluated,
+                supporting_evaluations=tuple(UUID(e) for e in row.supporting_evaluations),
+            )
+            for row in rows
+        ]

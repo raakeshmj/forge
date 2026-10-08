@@ -33,8 +33,9 @@ from forge.domain.execution import Execution, ExecutionStatus
 from forge.domain.mission import Budget, ExecutionPolicy, Mission, MissionStatus, RiskPolicy
 from forge.domain.plan import PlanError, PlannedTask, parse, validate
 from forge.domain.repositories import Clock, NotFoundError, UnitOfWork, UnitOfWorkFactory
+from forge.domain.risk import RiskLevel
 from forge.domain.task import Task, TaskKind, TaskStatus
-from forge.orchestration.routing import route_task
+from forge.orchestration.routing import RoutingEvidence, route_task
 
 AGENT_TOOLS = "*"  # resolved to the routed agent's tools; never a valid tool name
 PLANNING_KEY = "plan"
@@ -363,10 +364,20 @@ async def _route_and_ready(
         return []
     agents = await uow.agents.list_current()
     versions = {agent.id: version for agent, version in agents}
+    agent_ids = [agent.id for agent, _ in agents]
     workload = await uow.tasks.workload()
+    evidence = RoutingEvidence(
+        graph=await uow.capabilities.graph(),
+        competencies={
+            (c.agent_id, c.capability): c for c in await uow.competencies.for_agents(agent_ids)
+        },
+        reliability=await uow.executions.reliability(agent_ids),
+        workload=workload,
+        optimistic=mission.risk_policy.max_risk is RiskLevel.LOW,
+    )
     result = []
     for task in tasks:
-        routing = route_task(task, agents, workload)
+        routing = route_task(task, agents, evidence)
         await emit(
             TaskRouted(
                 aggregate_id=task.id,

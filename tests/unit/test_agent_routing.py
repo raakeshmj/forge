@@ -1,8 +1,12 @@
 from dataclasses import replace
 from uuid import uuid4
 
-from forge.orchestration.routing import route_task
+from forge.domain.capability import Capability, CapabilityGraph, Observation, estimate
+from forge.orchestration.routing import RoutingEvidence, route_task
 from tests import factories
+from tests.factories import NOW
+
+GRAPH = CapabilityGraph({"observability": Capability("observability", parent="incident-response")})
 
 
 def agents(*specs: tuple[str, tuple[str, ...]]):  # type: ignore[no-untyped-def]
@@ -13,33 +17,53 @@ def agents(*specs: tuple[str, tuple[str, ...]]):  # type: ignore[no-untyped-def]
     return result
 
 
-def test_capabilities_filter_and_lowest_workload_wins_with_name_tiebreak() -> None:
+def evidence(**overrides: object) -> RoutingEvidence:
+    base = RoutingEvidence(GRAPH, {}, {}, {}, optimistic=False)
+    return replace(base, **overrides)  # type: ignore[arg-type]
+
+
+def test_graph_filters_and_fitness_orders_with_deterministic_tiebreak() -> None:
     pool = agents(("alpha", ("observability",)), ("beta", ("observability", "k8s")), ("gamma", ()))
+    task = factories.task(agent_id=None, required_capabilities=("incident-response",))
+
+    routing = route_task(task, pool, evidence())
+
+    assert routing.agent_id == pool[0][0].id  # equal evidence: name order
+    assert routing.candidates[0].startswith("selected alpha: fitness")
+    assert routing.candidates[-1] == "gamma: cannot serve ['incident-response']"
+
+
+def test_measured_competency_beats_name_order() -> None:
+    pool = agents(("alpha", ("observability",)), ("beta", ("observability",)))
+    proven = estimate(
+        pool[1][0].id,
+        "observability",
+        [Observation(uuid4(), 1.0, 1.0, NOW) for _ in range(10)],
+        NOW,
+    )
     task = factories.task(agent_id=None, required_capabilities=("observability",))
 
-    idle = route_task(task, pool, {})
-    busy_alpha = route_task(task, pool, {pool[0][0].id: 2})
-
-    assert idle.agent_id == pool[0][0].id  # tie on workload: name order
-    assert busy_alpha.agent_id == pool[1][0].id
-    assert idle.candidates == (
-        "alpha: selected, workload 0",
-        "beta: eligible, workload 0",
-        "gamma: lacks ['observability']",
+    routing = route_task(
+        task, pool, evidence(competencies={(pool[1][0].id, "observability"): proven})
     )
+
+    assert routing.agent_id == pool[1][0].id
 
 
 def test_explicit_assignment_is_honoured_or_rejected_if_unknown() -> None:
     pool = agents(("alpha", ()))
 
-    assert route_task(factories.task(agent_id=pool[0][0].id), pool, {}).agent_id == pool[0][0].id
-    assert route_task(factories.task(agent_id=uuid4()), pool, {}).agent_id is None
+    assert (
+        route_task(factories.task(agent_id=pool[0][0].id), pool, evidence()).agent_id
+        == pool[0][0].id
+    )
+    assert route_task(factories.task(agent_id=uuid4()), pool, evidence()).agent_id is None
 
 
 def test_no_eligible_agent_is_explained() -> None:
-    routing = route_task(
-        factories.task(agent_id=None, required_capabilities=("x",)), agents(("a", ())), {}
-    )
+    task = factories.task(agent_id=None, required_capabilities=("x",))
+
+    routing = route_task(task, agents(("a", ())), evidence())
 
     assert routing.agent_id is None
-    assert routing.explanation == "a: lacks ['x']"
+    assert routing.explanation == "a: cannot serve ['x']"

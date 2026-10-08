@@ -237,6 +237,10 @@ Output:
 
 Routing decisions are observable.
 
+Fitness combines measured competency and reliability (optimistic bounds for
+low-risk work, pessimistic for riskier work), cost, latency, calibration, and
+workload (`docs/decisions/0008`).
+
 ---
 
 # 9. MODEL ROUTING

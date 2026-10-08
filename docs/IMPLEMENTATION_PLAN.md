@@ -216,6 +216,8 @@ Every mission can produce a structured evaluation.
 
 # PHASE 6 — CAPABILITY INTELLIGENCE
 
+Status: implemented. Decisions: `docs/decisions/0008`.
+
 ## Objective
 
 Measure and route based on agent capability.

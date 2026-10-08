@@ -397,7 +397,7 @@ async def test_no_agent_with_the_required_capability_fails_routing(uow: UowFacto
     async with uow() as tx:
         assert (await tx.missions.get(mission_id)).status is MissionStatus.FAILED
     routed = [p for kind, _, p in await events(uow, mission_id) if kind == "task.routed"]
-    assert routed[0]["candidates"] == ["generalist: lacks ['kubernetes']"]
+    assert routed[0]["candidates"] == ["generalist: cannot serve ['kubernetes']"]
 
 
 async def test_parallel_tasks_share_the_budget_without_overspending(uow: UowFactory) -> None:
