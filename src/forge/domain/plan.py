@@ -27,6 +27,7 @@ class PlannedTask:
     agent_id: UUID | None = None
     allowed_tools: tuple[str, ...] | None = None  # None: the mission's tool scope
     max_attempts: int = 1
+    agent_version_id: UUID | None = None  # pin an exact agent version (offline validation)
 
 
 def validate(

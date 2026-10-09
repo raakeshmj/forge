@@ -13,6 +13,7 @@ class ContextLayer(StrEnum):
     TOOLS = "tools"
     SYSTEM = "system"
     AGENT_IDENTITY = "agent_identity"
+    SKILLS = "skills"
     POLICIES = "policies"
     MISSION = "mission"
     TRANSCRIPT = "transcript"

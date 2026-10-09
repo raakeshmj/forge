@@ -144,3 +144,9 @@ forbidden_modules = [
     "forge.runtime", "forge.api", "forge.infrastructure", "forge.tools", "forge.evaluation",
     "forge.orchestration",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Learning proposes and validates; it never executes work or touches adapters directly"
+type = "forbidden"
+source_modules = ["forge.learning"]
+forbidden_modules = ["forge.runtime", "forge.api", "forge.infrastructure", "forge.tools"]

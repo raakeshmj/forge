@@ -44,6 +44,7 @@ from forge.domain.repositories import (
     NotFoundError,
 )
 from forge.domain.risk import RiskLevel
+from forge.domain.skill import CycleStatus, LearningCycle, SkillRef, SkillStatus, SkillVersion
 from forge.domain.task import Task, TaskKind, TaskStatus
 from forge.domain.tool import (
     InvocationStatus,
@@ -83,6 +84,8 @@ class PostgresUnitOfWork:
         self.benchmarks = _Benchmarks(connection)
         self.capabilities = _Capabilities(connection)
         self.competencies = _Competencies(connection)
+        self.skills = _Skills(connection)
+        self.learning = _Learning(connection)
         return self
 
     async def __aexit__(
@@ -115,6 +118,26 @@ class _Repository:
 
 
 class _Agents(_Repository):
+    async def add_version(self, version: AgentVersion) -> None:
+        await self._connection.execute(
+            insert(t.agent_versions).values(**_agent_version_values(version))
+        )
+
+    async def list_versions(self, agent_id: UUID) -> list[AgentVersion]:
+        rows = await self._connection.execute(
+            select(t.agent_versions)
+            .where(t.agent_versions.c.agent_id == agent_id)
+            .order_by(t.agent_versions.c.version)
+        )
+        return [_agent_version(row) for row in rows]
+
+    async def set_current(self, agent_id: UUID, version: int) -> None:
+        result = await self._connection.execute(
+            update(t.agents).where(t.agents.c.id == agent_id).values(current_version=version)
+        )
+        if result.rowcount != 1:
+            raise NotFoundError("agent", agent_id)
+
     async def add(self, agent: Agent, version: AgentVersion) -> None:
         # A savepoint keeps the caller's transaction usable if the name is taken.
         try:
@@ -130,20 +153,7 @@ class _Agents(_Repository):
         except IntegrityError as exc:
             raise AlreadyExistsError("agent", agent.name) from exc
         await self._connection.execute(
-            insert(t.agent_versions).values(
-                id=version.id,
-                agent_id=version.agent_id,
-                version=version.version,
-                role=version.role,
-                instructions=version.instructions,
-                model_provider=version.model.provider,
-                model_name=version.model.name,
-                tools=list(version.tools),
-                created_at=version.created_at,
-                fallback_models=[[m.provider, m.name] for m in version.fallback_models],
-                model_options=dict(version.model_options),
-                capabilities=list(version.capabilities),
-            )
+            insert(t.agent_versions).values(**_agent_version_values(version))
         )
 
     async def get(self, agent_id: UUID) -> Agent:
@@ -195,6 +205,24 @@ class _Agents(_Repository):
         return _agent_version(await self._one(statement, "agent", agent_id))
 
 
+def _agent_version_values(version: AgentVersion) -> dict[str, Any]:
+    return {
+        "id": version.id,
+        "agent_id": version.agent_id,
+        "version": version.version,
+        "role": version.role,
+        "instructions": version.instructions,
+        "model_provider": version.model.provider,
+        "model_name": version.model.name,
+        "tools": list(version.tools),
+        "created_at": version.created_at,
+        "fallback_models": [[m.provider, m.name] for m in version.fallback_models],
+        "model_options": dict(version.model_options),
+        "capabilities": list(version.capabilities),
+        "skills": [[s.name, s.version] for s in version.skills],
+    }
+
+
 def _agent_version(row: Row[Any]) -> AgentVersion:
     return AgentVersion(
         id=row.id,
@@ -206,6 +234,7 @@ def _agent_version(row: Row[Any]) -> AgentVersion:
         tools=tuple(row.tools),
         created_at=row.created_at,
         capabilities=tuple(row.capabilities),
+        skills=tuple(SkillRef(name, version) for name, version in row.skills),
         fallback_models=tuple(ModelRef(provider, name) for provider, name in row.fallback_models),
         model_options=row.model_options,
     )
@@ -305,6 +334,7 @@ class _Tasks(_Repository):
                 required_capabilities=list(task.required_capabilities),
                 max_attempts=task.max_attempts,
                 attempts=task.attempts,
+                agent_version_id=task.agent_version_id,
             )
         )
 
@@ -381,6 +411,7 @@ def _task(row: Row[Any]) -> Task:
         required_capabilities=tuple(row.required_capabilities),
         max_attempts=row.max_attempts,
         attempts=row.attempts,
+        agent_version_id=row.agent_version_id,
     )
 
 
@@ -1231,3 +1262,160 @@ class _Competencies(_Repository):
             )
             for row in rows
         ]
+
+
+# --- Skills and learning -----------------------------------------------------------------
+
+
+class _Skills(_Repository):
+    async def add(self, skill: SkillVersion) -> None:
+        await self._connection.execute(
+            insert(t.skill_versions).values(
+                name=skill.name,
+                version=skill.version,
+                capability=skill.capability,
+                instructions=skill.instructions,
+                status=skill.status.value,
+                provenance=dict(skill.provenance),
+                parent_version=skill.parent_version,
+                validation=dict(skill.validation),
+                created_at=skill.created_at,
+                row_version=skill.row_version,
+            )
+        )
+
+    async def get(self, name: str, version: int, *, for_update: bool = False) -> SkillVersion:
+        statement = select(t.skill_versions).where(
+            t.skill_versions.c.name == name, t.skill_versions.c.version == version
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return _skill(await self._one(statement, "skill", f"{name}@{version}"))
+
+    async def next_version(self, name: str) -> int:
+        current = await self._connection.scalar(
+            select(func.max(t.skill_versions.c.version)).where(t.skill_versions.c.name == name)
+        )
+        return int(current or 0) + 1
+
+    async def list_all(self) -> list[SkillVersion]:
+        rows = await self._connection.execute(
+            select(t.skill_versions).order_by(t.skill_versions.c.name, t.skill_versions.c.version)
+        )
+        return [_skill(row) for row in rows]
+
+    async def update(self, skill: SkillVersion) -> SkillVersion:
+        result = await self._connection.execute(
+            update(t.skill_versions)
+            .where(
+                t.skill_versions.c.name == skill.name,
+                t.skill_versions.c.version == skill.version,
+                t.skill_versions.c.row_version == skill.row_version,
+            )
+            .values(
+                status=skill.status.value,
+                validation=dict(skill.validation),
+                row_version=skill.row_version + 1,
+            )
+        )
+        if result.rowcount != 1:
+            raise ConcurrentUpdateError("skill", f"{skill.name}@{skill.version}")
+        return replace(skill, row_version=skill.row_version + 1)
+
+
+def _skill(row: Row[Any]) -> SkillVersion:
+    return SkillVersion(
+        name=row.name,
+        version=row.version,
+        capability=row.capability,
+        instructions=row.instructions,
+        status=SkillStatus(row.status),
+        provenance=row.provenance,
+        parent_version=row.parent_version,
+        created_at=row.created_at,
+        validation=row.validation,
+        row_version=row.row_version,
+    )
+
+
+class _Learning(_Repository):
+    async def add(self, cycle: LearningCycle) -> None:
+        await self._connection.execute(insert(t.learning_cycles).values(**_cycle_values(cycle)))
+
+    async def get(self, cycle_id: UUID, *, for_update: bool = False) -> LearningCycle:
+        statement = select(t.learning_cycles).where(t.learning_cycles.c.id == cycle_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return _cycle(await self._one(statement, "learning cycle", cycle_id))
+
+    async def update(self, cycle: LearningCycle) -> LearningCycle:
+        values = _cycle_values(cycle)
+        values["row_version"] = cycle.row_version + 1
+        result = await self._connection.execute(
+            update(t.learning_cycles)
+            .where(
+                t.learning_cycles.c.id == cycle.id,
+                t.learning_cycles.c.row_version == cycle.row_version,
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            raise ConcurrentUpdateError("learning cycle", cycle.id)
+        return replace(cycle, row_version=cycle.row_version + 1)
+
+    async def list_cycles(self, agent_id: UUID | None = None) -> list[LearningCycle]:
+        statement = select(t.learning_cycles).order_by(t.learning_cycles.c.created_at)
+        if agent_id is not None:
+            statement = statement.where(t.learning_cycles.c.agent_id == agent_id)
+        return [_cycle(row) for row in await self._connection.execute(statement)]
+
+    async def in_status(self, *statuses: CycleStatus) -> list[LearningCycle]:
+        rows = await self._connection.execute(
+            select(t.learning_cycles)
+            .where(t.learning_cycles.c.status.in_([s.value for s in statuses]))
+            .order_by(t.learning_cycles.c.created_at)
+        )
+        return [_cycle(row) for row in rows]
+
+
+def _cycle_values(cycle: LearningCycle) -> dict[str, Any]:
+    return {
+        "id": cycle.id,
+        "agent_id": cycle.agent_id,
+        "capability": cycle.capability,
+        "status": cycle.status.value,
+        "analysis": dict(cycle.analysis),
+        "gap": dict(cycle.gap),
+        "skill_name": None if cycle.skill is None else cycle.skill.name,
+        "skill_version": None if cycle.skill is None else cycle.skill.version,
+        "dataset": cycle.dataset,
+        "baseline_version_id": cycle.baseline_version_id,
+        "candidate_version_id": cycle.candidate_version_id,
+        "baseline_run_id": cycle.baseline_run_id,
+        "candidate_run_id": cycle.candidate_run_id,
+        "delta": dict(cycle.delta),
+        "created_at": cycle.created_at,
+        "updated_at": cycle.updated_at,
+        "row_version": cycle.row_version,
+    }
+
+
+def _cycle(row: Row[Any]) -> LearningCycle:
+    return LearningCycle(
+        id=row.id,
+        agent_id=row.agent_id,
+        capability=row.capability,
+        status=CycleStatus(row.status),
+        analysis=row.analysis,
+        gap=row.gap,
+        skill=None if row.skill_name is None else SkillRef(row.skill_name, row.skill_version),
+        dataset=row.dataset,
+        baseline_version_id=row.baseline_version_id,
+        candidate_version_id=row.candidate_version_id,
+        baseline_run_id=row.baseline_run_id,
+        candidate_run_id=row.candidate_run_id,
+        delta=row.delta,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        row_version=row.row_version,
+    )

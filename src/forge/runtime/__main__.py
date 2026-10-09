@@ -20,6 +20,8 @@ from forge.inference.profiles import DEMO_MODEL, PROFILES
 from forge.infrastructure import postgres
 from forge.infrastructure.clock import SystemClock
 from forge.infrastructure.store import PostgresUnitOfWork
+from forge.learning import worker as learning_worker
+from forge.learning.generation import DeterministicSkillGenerator
 from forge.observability.logs import configure_logging
 from forge.observability.tracing import configure_tracing
 from forge.runtime.agent_loop import Runtime
@@ -101,6 +103,14 @@ async def serve(settings: WorkerSettings) -> None:
             ).run_until(stop),
             evaluation_worker.run_until(
                 uow_factory, clock, stop, poll_interval_seconds=settings.poll_interval_seconds
+            ),
+            learning_worker.run_until(
+                uow_factory,
+                clock,
+                stop,
+                poll_interval_seconds=max(settings.poll_interval_seconds, 2.0),
+                generator=DeterministicSkillGenerator(),
+                auto_detect=settings.learning_auto,
             ),
         )
     )

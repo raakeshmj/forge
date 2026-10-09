@@ -24,6 +24,7 @@ from forge.domain.context import (
 )
 from forge.domain.mission import Mission
 from forge.domain.model import CacheHints, Message, ModelRequest, Role, SystemBlock, ToolResultBlock
+from forge.domain.skill import SkillVersion
 from forge.domain.tool import ToolDefinition
 from forge.inference.profiles import CachingMode, ModelProfile
 from forge.inference.tokens import estimate_messages, estimate_text, estimate_tools
@@ -54,6 +55,7 @@ class PlanningInputs:
     mission: Mission
     tools: tuple[ToolDefinition, ...]
     messages: tuple[Message, ...]
+    skills: tuple[SkillVersion, ...] = ()  # the exact versions the agent version pins
 
 
 def stable_blocks(inputs: PlanningInputs) -> tuple[ContextBlock, ...]:
@@ -78,6 +80,17 @@ def stable_blocks(inputs: PlanningInputs) -> tuple[ContextBlock, ...]:
             f"{inputs.version.id}",
             1,
             f"Role: {inputs.version.role}\n\n{inputs.version.instructions}",
+        ),
+        *(
+            _block(
+                f"skill.{skill.name}",
+                ContextLayer.SKILLS,
+                f"skill {skill.name}",
+                f"{skill.name}@{skill.version}",
+                1,
+                f"Skill: {skill.name}\n\n{skill.instructions}",
+            )
+            for skill in inputs.skills
         ),
         _block(
             "policies.mission",
@@ -142,7 +155,10 @@ def plan_cache(plan: ContextPlan, profile: ModelProfile) -> tuple[ContextPlan, C
         return plan, CacheHints(key=hashlib.sha256(identity.encode()).hexdigest()[:32])
 
     # Explicit: candidate breakpoints after each sharing scope, then after the transcript.
-    candidates = ["system.platform", "agent.identity", plan.blocks[-1].key, TRANSCRIPT_KEY]
+    agent_scoped = [
+        b.key for b in plan.blocks if b.layer in (ContextLayer.AGENT_IDENTITY, ContextLayer.SKILLS)
+    ]
+    candidates = ["system.platform", agent_scoped[-1], plan.blocks[-1].key, TRANSCRIPT_KEY]
     breakpoints: list[str] = []
     prefix = 0
     for block in plan.blocks:

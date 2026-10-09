@@ -63,6 +63,7 @@ class Task:
     required_capabilities: tuple[str, ...] = ()
     max_attempts: int = 1
     attempts: int = 0
+    agent_version_id: UUID | None = None  # pinned version (validation); None: the agent's current
 
     def __post_init__(self) -> None:
         if not self.objective.strip():

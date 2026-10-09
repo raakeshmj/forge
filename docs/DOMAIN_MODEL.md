@@ -246,6 +246,10 @@ PROMOTED
   +----> DEPRECATED
 ```
 
+CANDIDATE and VALIDATED may also become REJECTED. Skill content is immutable
+(database-enforced); agents pin exact skill versions, so promotion creates a new
+agent version and rollback restores the previous one (`docs/decisions/0009`).
+
 ---
 
 # 11. TOOL

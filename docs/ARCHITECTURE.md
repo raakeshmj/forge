@@ -525,6 +525,10 @@ New Skill Version
 
 Promotion requires explicit evaluation criteria.
 
+Shadow validation is realised as an offline A/B run of baseline and candidate agent
+versions on a held-out dataset; live traffic is never shadowed because tool side
+effects would repeat (`docs/decisions/0009`).
+
 ---
 
 # 18. SECURITY ARCHITECTURE

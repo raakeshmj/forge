@@ -379,3 +379,59 @@ class CompetencyUpdated(DomainEvent):
     uncertainty: float
     sample_count: int
     evaluation_id: UUID
+
+
+# --- Learning ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityGapDetected(DomainEvent):
+    aggregate_type = "learning_cycle"
+    event_type = "capability_gap.detected"
+    agent_id: UUID
+    capability: str
+    failing_evaluations: int
+    pattern: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SkillCandidateCreated(DomainEvent):
+    aggregate_type = "learning_cycle"
+    event_type = "skill.candidate.created"
+    skill: str
+    version: int
+    generator: str
+    dataset: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SkillValidated(DomainEvent):
+    aggregate_type = "learning_cycle"
+    event_type = "skill.validated"
+    skill: str
+    version: int
+    passed: bool
+    reasons: tuple[str, ...]
+    correctness_delta: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class SkillPromoted(DomainEvent):
+    aggregate_type = "learning_cycle"
+    event_type = "skill.promoted"
+    skill: str
+    version: int
+    agent_id: UUID
+    agent_version: int
+    previous_agent_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRolledBack(DomainEvent):
+    aggregate_type = "learning_cycle"
+    event_type = "skill.rolled_back"
+    skill: str
+    version: int
+    agent_id: UUID
+    restored_agent_version: int
+    reason: str

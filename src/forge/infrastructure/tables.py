@@ -54,6 +54,7 @@ agent_versions = Table(
     Column("fallback_models", JSONB, nullable=False),
     Column("model_options", JSONB, nullable=False),
     Column("capabilities", JSONB, nullable=False),
+    Column("skills", JSONB, nullable=False),
 )
 
 missions = Table(
@@ -94,6 +95,7 @@ tasks = Table(
     Column("required_capabilities", JSONB, nullable=False),
     Column("max_attempts", Integer, nullable=False),
     Column("attempts", Integer, nullable=False),
+    _uuid("agent_version_id", nullable=True),
 )
 
 executions = Table(
@@ -282,4 +284,41 @@ competencies = Table(
     _ts("last_evaluated", nullable=True),
     Column("supporting_evaluations", JSONB, nullable=False),
     _ts("updated_at"),
+)
+
+skill_versions = Table(
+    "skill_versions",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("version", Integer, primary_key=True),
+    Column("capability", Text, nullable=False),
+    Column("instructions", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("provenance", JSONB, nullable=False),
+    Column("parent_version", Integer, nullable=True),
+    Column("validation", JSONB, nullable=False),
+    _ts("created_at"),
+    Column("row_version", Integer, nullable=False),
+)
+
+learning_cycles = Table(
+    "learning_cycles",
+    metadata,
+    _uuid("id", primary_key=True),
+    _uuid("agent_id"),
+    Column("capability", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("analysis", JSONB, nullable=False),
+    Column("gap", JSONB, nullable=False),
+    Column("skill_name", Text, nullable=True),
+    Column("skill_version", Integer, nullable=True),
+    Column("dataset", Text, nullable=True),
+    _uuid("baseline_version_id", nullable=True),
+    _uuid("candidate_version_id", nullable=True),
+    _uuid("baseline_run_id", nullable=True),
+    _uuid("candidate_run_id", nullable=True),
+    Column("delta", JSONB, nullable=False),
+    _ts("created_at"),
+    _ts("updated_at"),
+    Column("row_version", Integer, nullable=False),
 )

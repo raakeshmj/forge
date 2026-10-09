@@ -11,6 +11,7 @@ Its profile's minimum cacheable size applies, as it would on a real provider.
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 
@@ -76,15 +77,19 @@ class DemoInvestigationModel:
             stop_reason = "end_turn"
         elif not results and METRICS_TOOL in tool_names:
             turn = sum(1 for message in request.messages if message.role is Role.ASSISTANT)
+            service = _named_service(request) if _follows_service_skill(request) else "checkout"
             content = (
-                TextBlock("Checking checkout latency around the latest deployment."),
+                TextBlock(f"Checking {service} latency around the latest deployment."),
                 ToolUseBlock(
                     id=f"call_{turn}_0",
                     name=METRICS_TOOL,
-                    arguments={"service": "checkout", "metric": "latency_p95_ms", "window": "24h"},
+                    arguments={"service": service, "metric": "latency_p95_ms", "window": "24h"},
                 ),
             )
             stop_reason = "tool_use"
+        elif _follows_service_skill(request):
+            content = (TextBlock(_analysed_conclusion(_named_service(request), results)),)
+            stop_reason = "end_turn"
         else:
             content = (TextBlock(_conclusion(results)),)
             stop_reason = "end_turn"
@@ -139,6 +144,53 @@ def _prefix_segments(request: ModelRequest) -> list[tuple[int, str, bool]]:
             last and request.cache.last_message,
         )
     return segments
+
+
+_SERVICE_SKILL_MARKER = "service named in the objective"
+_SERVICE = re.compile(r"\b([a-z][a-z-]*) latency\b")
+_POINT = re.compile(r"(\d{1,2}:\d{2})=(\d+)")
+
+
+def _follows_service_skill(request: ModelRequest) -> bool:
+    """Simulates instruction following: a pinned skill can change how the demo investigates."""
+    return any(
+        block.key.startswith("skill.") and _SERVICE_SKILL_MARKER in block.text
+        for block in request.system
+    )
+
+
+def _named_service(request: ModelRequest) -> str:
+    first = request.messages[0].content[0] if request.messages else None
+    match = _SERVICE.search(first.text.lower()) if isinstance(first, TextBlock) else None
+    return match.group(1) if match else "checkout"
+
+
+def _analysed_conclusion(service: str, results: list[ToolResultBlock]) -> str:
+    """Read the series: regression after the deploy, a spike before it, or nothing."""
+    usable = [r for r in results if not r.is_error]
+    if not usable:
+        return f"Conclusion: no {service} metrics were available. Confidence: 0.2"
+    data = usable[-1].content
+    deploy_at = data.find("deploy")
+    points = [(m.group(1), int(m.group(2)), m.start()) for m in _POINT.finditer(data)]
+    if not points:
+        return f"Conclusion: the {service} metrics were unreadable. Confidence: 0.2"
+    baseline = points[0][1]
+    peak_time, peak, position = max(points, key=lambda p: p[1])
+    if peak <= 1.5 * baseline:
+        return (
+            f"Conclusion: {service} latency shows no regression after the deployment "
+            f"(latest {points[-1][1]}ms vs {baseline}ms).\nEvidence: {data}\nConfidence: 0.85"
+        )
+    if deploy_at >= 0 and position > deploy_at:
+        return (
+            f"Conclusion: {service} latency regressed after the deployment; p95 reached "
+            f"{peak}ms at {peak_time}.\nEvidence: {data}\nConfidence: 0.85"
+        )
+    return (
+        f"Conclusion: {service} latency spiked to {peak}ms at {peak_time}, before the "
+        f"deployment, so the deployment is not the cause.\nEvidence: {data}\nConfidence: 0.85"
+    )
 
 
 def _conclusion(results: list[ToolResultBlock]) -> str:

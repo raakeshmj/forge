@@ -63,6 +63,7 @@ class MissionRequest:
     success_criteria: tuple[str, ...] = ()
     required_capabilities: tuple[str, ...] = ()
     allowed_tools: Sequence[str] | None = None  # single-task mode only
+    agent_version_id: UUID | None = None  # single-task mode: pin an exact agent version
     risk_policy: RiskPolicy = field(default_factory=RiskPolicy)
     execution_policy: ExecutionPolicy = field(default_factory=ExecutionPolicy)
 
@@ -126,8 +127,19 @@ async def submit_mission(
 
         tools = None if request.allowed_tools is None else tuple(request.allowed_tools)
         planned = request.tasks or (
-            PlannedTask("main", request.objective, agent_id=request.agent_id, allowed_tools=tools),
+            PlannedTask(
+                "main",
+                request.objective,
+                agent_id=request.agent_id,
+                allowed_tools=tools,
+                agent_version_id=request.agent_version_id,
+            ),
         )
+        for item in planned:
+            if item.agent_version_id is not None:
+                pinned = await uow.agents.get_version(item.agent_version_id)
+                if pinned.agent_id != item.agent_id:
+                    raise DomainError("a pinned agent version must belong to the task's agent")
         mission = await _accept_plan(uow, mission, validate(planned, scope), now, emit)
     return mission
 
@@ -314,6 +326,7 @@ async def _materialize(
             dependencies=tuple(ids[key] for key in planned.depends_on),
             required_capabilities=planned.required_capabilities,
             max_attempts=planned.max_attempts,
+            agent_version_id=planned.agent_version_id,
         )
         ids[planned.key] = task.id
         await uow.tasks.add(task)
@@ -394,7 +407,9 @@ async def _route_and_ready(
             continue
         allowed = task.allowed_tools
         if AGENT_TOOLS in allowed:
-            allowed = versions[routing.agent_id].tools
+            pinned = task.agent_version_id
+            version = await uow.agents.get_version(pinned) if pinned else versions[routing.agent_id]
+            allowed = version.tools
         routed = replace(task, agent_id=routing.agent_id, allowed_tools=tuple(sorted(set(allowed))))
         result.append(await uow.tasks.update(routed.transition(TaskStatus.READY, now)))
         workload[routing.agent_id] = workload.get(routing.agent_id, 0) + 1  # spread fan-out

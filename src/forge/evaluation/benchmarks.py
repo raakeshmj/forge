@@ -93,6 +93,7 @@ async def start_run(
     agent_id: UUID,
     version: int | None = None,
     budget_micro_usd: int = 100_000,
+    agent_version_id: UUID | None = None,
 ) -> BenchmarkRun:
     """Submit one mission per case; workers execute them and the evaluator scores them."""
     async with uow_factory() as uow:
@@ -107,6 +108,7 @@ async def start_run(
             MissionRequest(
                 objective=case.objective,
                 agent_id=agent_id,
+                agent_version_id=agent_version_id,
                 budget=Budget(budget_micro_usd),
                 required_capabilities=case.required_capabilities,
             ),

@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from forge.domain.common import DomainError, JSONValue
+from forge.domain.skill import SkillRef
 
 # Request fields FORGE itself controls. Model options may tune provider behaviour but must
 # never replace the planned context, tool set, or limits (ADR 0004).
@@ -66,7 +67,8 @@ class AgentVersion:
     tools: tuple[str, ...]
     created_at: datetime
     fallback_models: tuple[ModelRef, ...] = ()
-    capabilities: tuple[str, ...] = ()  # declared; measured competency arrives in Phase 6
+    capabilities: tuple[str, ...] = ()  # declared; competency is measured separately
+    skills: tuple[SkillRef, ...] = ()  # exact versions: promotion creates a new agent version
     # Provider-specific parameters passed through untouched (CLAUDE.md §6).
     model_options: Mapping[str, JSONValue] = field(default_factory=dict)
 

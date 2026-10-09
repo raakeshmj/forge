@@ -239,6 +239,8 @@ Agent selection uses measured capability, uncertainty, reliability, cost, latenc
 
 # PHASE 7 — LEARNING
 
+Status: implemented. Decisions: `docs/decisions/0009`.
+
 ## Objective
 
 Enable controlled improvement.

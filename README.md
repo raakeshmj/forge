@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-6 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, and capability-aware routing on measured competency. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-7 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, and controlled learning (validated, reversible skill promotion). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -52,6 +52,13 @@ with an `agent_id` measures that agent against ground truth
 Evaluations feed per-capability competency estimates with uncertainty
 (`GET /agents/{id}`); routing prefers measured ability, reliability, cost, and
 latency over declarations alone. `GET /capabilities` shows the capability graph.
+
+`POST /learning/cycles` with an `agent_id` and `capability` analyses failures;
+a real gap yields a candidate skill, validated by an A/B run on held-out cases.
+`POST /learning/cycles/{id}/promote` moves the agent to a version pinning the
+skill; `/rollback` restores the previous version. The demo provider follows skill
+text deterministically, so the integration tests show the full loop: the demo
+investigator goes from 1/3 to 3/3 on the incident benchmark after promotion.
 
 The `demo` provider is a deterministic local model that simulates prefix caching.
 Agents can name Anthropic or OpenAI models (with `fallback_models`); the worker

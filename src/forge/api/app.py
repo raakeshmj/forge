@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from forge.api import agents, capabilities, evaluations, health, missions, tools
+from forge.api import agents, capabilities, evaluations, health, learning, missions, tools
 from forge.api.correlation import correlation_middleware
 from forge.domain.common import DomainError
 from forge.domain.repositories import AlreadyExistsError, Clock, NotFoundError, UnitOfWorkFactory
+from forge.domain.skill import LearningError
 from forge.evaluation.service import MissionNotFinishedError
 from forge.health import DependencyCheck
 from forge.orchestration.missions import MissionAlreadyFinishedError
@@ -43,6 +44,7 @@ def create_app(
     app.include_router(tools.router)
     app.include_router(evaluations.router)
     app.include_router(capabilities.router)
+    app.include_router(learning.router)
     _register_error_handlers(app)
     return app
 
@@ -60,4 +62,5 @@ def _register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AlreadyExistsError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(MissionAlreadyFinishedError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(MissionNotFinishedError, handler(status.HTTP_409_CONFLICT))
+    app.add_exception_handler(LearningError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(DomainError, handler(status.HTTP_422_UNPROCESSABLE_CONTENT))

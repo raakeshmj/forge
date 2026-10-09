@@ -39,6 +39,7 @@ from forge.domain.execution import Execution, ExecutionStatus, FailureKind
 from forge.domain.mission import Mission
 from forge.domain.model import ModelRequest, ModelResponse, Role, ToolResultBlock, ToolUseBlock
 from forge.domain.repositories import Clock, UnitOfWork, UnitOfWorkFactory
+from forge.domain.skill import SkillVersion
 from forge.domain.task import Task, TaskStatus
 from forge.domain.tool import (
     InvocationStatus,
@@ -109,10 +110,14 @@ async def claim_next(runtime: Runtime) -> Claim | None:
             return None
         if task.agent_id is None:  # READY tasks are always routed (database constraint)
             raise RuntimeError(f"task {task.id} is READY but has no agent")
-        version = await uow.agents.get_current_version(task.agent_id)
+        if task.agent_version_id is not None:
+            version = await uow.agents.get_version(task.agent_version_id)
+        else:
+            version = await uow.agents.get_current_version(task.agent_id)
         mission = await uow.missions.get(task.mission_id)
         initial = AgentState.initial(await missions.task_brief(uow, task))
-        decision, required_tokens = _route(runtime, version, task, mission, initial)
+        skills = tuple([await uow.skills.get(ref.name, ref.version) for ref in version.skills])
+        decision, required_tokens = _route(runtime, version, task, mission, initial, skills)
         execution = Execution(
             id=uuid4(),
             mission_id=task.mission_id,
@@ -187,11 +192,16 @@ def exposed_tools(
 
 
 def _route(
-    runtime: Runtime, version: AgentVersion, task: Task, mission: Mission, state: AgentState
+    runtime: Runtime,
+    version: AgentVersion,
+    task: Task,
+    mission: Mission,
+    state: AgentState,
+    skills: tuple[SkillVersion, ...],
 ) -> tuple[RoutingDecision, int]:
     """Choose the execution's model once, before any context is built (ARCHITECTURE §10)."""
     tools = exposed_tools(runtime, version, task, mission)
-    inputs = PlanningInputs(version, mission, tools, state.messages)
+    inputs = PlanningInputs(version, mission, tools, state.messages, skills)
     required = sum(b.token_estimate for b in stable_blocks(inputs)) + estimate_messages(
         inputs.messages
     )
@@ -216,6 +226,7 @@ class ExecutionRunner:
     _sequence: int
     _correlation_id: str
     _plan: ContextPlan
+    _skills: tuple[SkillVersion, ...]
 
     def __init__(self, runtime: Runtime, claim: Claim) -> None:
         self._rt = runtime
@@ -228,6 +239,9 @@ class ExecutionRunner:
             mission = await uow.missions.get(self._execution.mission_id)
             self._task = await uow.tasks.get(self._execution.task_id)
             self._version = await uow.agents.get_version(self._execution.agent_version_id)
+            self._skills = tuple(
+                [await uow.skills.get(ref.name, ref.version) for ref in self._version.skills]
+            )
             checkpoint = await uow.checkpoints.latest(self._execution.id)
         if checkpoint is None:
             raise RuntimeError(f"execution {self._execution.id} has no checkpoint")
@@ -305,6 +319,7 @@ class ExecutionRunner:
             mission,
             exposed_tools(self._rt, self._version, self._task, mission, self._state),
             self._state.messages,
+            self._skills,
         )
         output_tokens = min(policy.max_output_tokens, profile.max_output_tokens)
         try:

@@ -60,6 +60,7 @@ class WorkerSettings:
     database_url: str = field(repr=False)
     tool_config_path: str | None = None  # MCP servers and remote API tools (ADR 0005)
     concurrency: int = 1  # parallel claim loops in this process (ADR 0006)
+    learning_auto: bool = False  # start learning cycles on detected gaps (ADR 0009)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -81,6 +82,7 @@ class WorkerSettings:
             database_url=reader.required("FORGE_DATABASE_URL"),
             tool_config_path=reader.optional("FORGE_TOOL_CONFIG"),
             concurrency=reader.integer("FORGE_WORKER_CONCURRENCY", default=1),
+            learning_auto=reader.text("FORGE_LEARNING_AUTO", default="false").lower() == "true",
         )
         reader.raise_if_invalid()
         return settings
