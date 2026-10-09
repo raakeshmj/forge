@@ -1,12 +1,21 @@
 """FastAPI application factory."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from forge.api import agents, capabilities, evaluations, health, learning, missions, tools
+from forge.api import (
+    agents,
+    capabilities,
+    evaluations,
+    governance,
+    health,
+    learning,
+    missions,
+    tools,
+)
 from forge.api.correlation import correlation_middleware
 from forge.domain.common import DomainError
 from forge.domain.repositories import AlreadyExistsError, Clock, NotFoundError, UnitOfWorkFactory
@@ -14,6 +23,7 @@ from forge.domain.skill import LearningError
 from forge.evaluation.service import MissionNotFinishedError
 from forge.health import DependencyCheck
 from forge.orchestration.missions import MissionAlreadyFinishedError
+from forge.security.approvals import ApprovalError
 
 
 def create_app(
@@ -23,6 +33,7 @@ def create_app(
     readiness_checks: Sequence[DependencyCheck],
     readiness_timeout_seconds: float,
     on_shutdown: Sequence[Callable[[], Awaitable[None]]] = (),
+    operator_tokens: Mapping[str, str] | None = None,
 ) -> FastAPI:
     """Build the app from already-constructed dependencies; `on_shutdown` releases them."""
 
@@ -37,6 +48,7 @@ def create_app(
     app.state.clock = clock
     app.state.readiness_checks = tuple(readiness_checks)
     app.state.readiness_timeout_seconds = readiness_timeout_seconds
+    app.state.operator_tokens = dict(operator_tokens or {})  # none configured: nobody is one
     app.middleware("http")(correlation_middleware)
     app.include_router(health.router)
     app.include_router(agents.router)
@@ -45,6 +57,7 @@ def create_app(
     app.include_router(evaluations.router)
     app.include_router(capabilities.router)
     app.include_router(learning.router)
+    app.include_router(governance.router)
     _register_error_handlers(app)
     return app
 
@@ -63,4 +76,5 @@ def _register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(MissionAlreadyFinishedError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(MissionNotFinishedError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(LearningError, handler(status.HTTP_409_CONFLICT))
+    app.add_exception_handler(ApprovalError, handler(status.HTTP_409_CONFLICT))
     app.add_exception_handler(DomainError, handler(status.HTTP_422_UNPROCESSABLE_CONTENT))

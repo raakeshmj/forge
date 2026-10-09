@@ -1,21 +1,24 @@
 """The only path from a model tool request to tool execution (CLAUDE.md §16, ARCHITECTURE §18).
 
-identity -> permission -> validation -> risk -> policy -> execution -> audit. Audit is the
-`tool.*` events the runtime commits. Stages owned by later phases deny: with no
-Policy Engine or Approval Service yet, anything above LOW risk is refused.
+identity -> permission -> validation -> risk ceiling -> governance -> execution -> audit.
+Governance (ADR 0010): LOW executes; MEDIUM needs an allowing policy rule; HIGH needs a
+human approval of this exact call; CRITICAL is disabled unless an operator enabled the
+tool, and then also needs approval. Anything unmatched is denied.
 """
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 from forge.domain.agent import AgentVersion
 from forge.domain.common import JSONValue
+from forge.domain.governance import Approval, ApprovalStatus, Effect, Policy, evaluate
 from forge.domain.mission import Mission
 from forge.domain.risk import RiskLevel
 from forge.domain.task import Task
-from forge.domain.tool import ToolResult
+from forge.domain.tool import ToolResult, arguments_sha256
 from forge.tools.base import Tool, ToolContext, ToolExecutionError
 from forge.tools.validation import argument_errors
 
@@ -26,6 +29,7 @@ class Stage(StrEnum):
     VALIDATION = "validation"
     RISK = "risk"
     POLICY = "policy"
+    APPROVAL = "approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,15 +37,21 @@ class Decision:
     allowed: bool
     stage: Stage | None = None
     reason: str = ""
+    requires_approval: bool = False  # a human must approve this exact call first
+
+
+@dataclass(frozen=True, slots=True)
+class Governance:
+    """The governance state a decision reads, loaded with the step (ADR 0010)."""
+
+    policies: tuple[Policy, ...] = ()
+    critical_enabled: frozenset[str] = field(default_factory=frozenset)
+    approval: Approval | None = None  # the latest approval for this call's idempotency key
+    idempotency_key: str = ""
+    now: datetime | None = None
 
 
 _ALLOW = Decision(allowed=True)
-
-_UNAVAILABLE_GOVERNANCE = {
-    RiskLevel.MEDIUM: "policy evaluation, which is not available yet",
-    RiskLevel.HIGH: "human approval, which is not available yet",
-    RiskLevel.CRITICAL: "administrator enablement; CRITICAL tools are disabled",
-}
 
 
 def authorize(
@@ -51,9 +61,12 @@ def authorize(
     version: AgentVersion,
     task: Task,
     mission: Mission,
+    agent_name: str = "",
     arguments: Mapping[str, JSONValue] | None = None,
+    governance: Governance | None = None,
 ) -> Decision:
     """Run every stage before execution. `arguments=None` asks only whether a call could pass."""
+    governance = governance or Governance()
     if version.agent_id != task.agent_id or task.mission_id != mission.id:
         return Decision(False, Stage.IDENTITY, "execution identity does not match the task")
     tool = tools.get(tool_name)
@@ -71,11 +84,43 @@ def authorize(
     if risk.exceeds(mission.risk_policy.max_risk):
         ceiling = mission.risk_policy.max_risk
         return Decision(False, Stage.RISK, f"{risk} risk exceeds the mission ceiling {ceiling}")
-    if risk is not RiskLevel.LOW:
+    if risk is RiskLevel.LOW:
+        return _ALLOW
+    if risk is RiskLevel.CRITICAL and tool_name not in governance.critical_enabled:
         return Decision(
-            False, Stage.POLICY, f"{risk} risk requires {_UNAVAILABLE_GOVERNANCE[risk]}"
+            False, Stage.POLICY, "CRITICAL tools are disabled unless an operator enables them"
         )
-    return _ALLOW
+    policy = evaluate(
+        governance.policies, tool=tool_name, agent_name=agent_name, arguments=arguments
+    )
+    # MEDIUM is denied unless a rule allows it; HIGH and CRITICAL only by an explicit rule,
+    # since approval, not policy, is what lets them run.
+    if policy.effect is Effect.DENY and (risk is RiskLevel.MEDIUM or policy.policy is not None):
+        return Decision(False, Stage.POLICY, f"{policy.reason} ({policy.policy or 'default deny'})")
+    if risk is RiskLevel.MEDIUM and policy.effect is Effect.ALLOW:
+        return _ALLOW
+    return _approval_decision(arguments, governance)
+
+
+def _approval_decision(
+    arguments: Mapping[str, JSONValue] | None, governance: Governance
+) -> Decision:
+    if arguments is None:
+        return Decision(True, Stage.APPROVAL, "requires human approval", requires_approval=True)
+    approval, digest, now = governance.approval, arguments_sha256(arguments), governance.now
+    if approval is None or approval.arguments_sha256 != digest:
+        return Decision(False, Stage.APPROVAL, "requires human approval", requires_approval=True)
+    if approval.status is ApprovalStatus.PENDING:
+        return Decision(False, Stage.APPROVAL, "awaiting human approval", requires_approval=True)
+    if now is not None and approval.authorizes(governance.idempotency_key, digest, now):
+        return _ALLOW
+    if approval.status is ApprovalStatus.APPROVED:
+        return Decision(False, Stage.APPROVAL, "the approval expired before execution")
+    return Decision(
+        False,
+        Stage.APPROVAL,
+        f"{approval.status.value.lower()} by {approval.decided_by}: {approval.decision_reason}",
+    )
 
 
 @dataclass(frozen=True, slots=True)

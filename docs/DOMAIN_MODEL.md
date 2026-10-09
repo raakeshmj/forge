@@ -325,12 +325,17 @@ States:
 ```text
 RUNNING
   |
+  +----> WAITING_APPROVAL ---> RUNNING (decided, expired, or the mission ended)
+  |
   +----> COMPLETED
   |
   +----> FAILED
   |
   +----> CANCELLED
 ```
+
+A waiting execution holds no lease. Resuming it after a decision is not a crash
+recovery, so its `attempt` is unchanged (`docs/decisions/0010`).
 
 An execution is created when a worker first claims its task. A crashed worker
 leaves it RUNNING under an expiring lease; recovery is a further `attempt` of the
@@ -440,6 +445,11 @@ Examples:
 - write restrictions
 - approval requirements
 
+Implemented as named, versioned, append-only rule lists (`docs/decisions/0010`).
+- A rule has an effect (`allow`, `deny`, `require_approval`), tool glob patterns, optional agent names, and argument conditions (`eq`, `ne`, `in`, `not_in`, `prefix`, `max_length`).
+- The newest version of each name is active. Rules are evaluated in policy-name order and the first match decides. No match means deny.
+- Cost, runtime and risk ceilings stay on the mission (budget, deadline, risk policy).
+
 ---
 
 # 20. APPROVAL
@@ -457,6 +467,9 @@ Contains:
 - mission
 - expiry
 - decision
+
+States: PENDING → APPROVED | DENIED | EXPIRED. Each approval binds one exact tool
+call (idempotency key and argument hash) (`docs/decisions/0010`).
 
 ---
 

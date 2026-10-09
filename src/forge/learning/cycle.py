@@ -22,6 +22,7 @@ from forge.domain.events import (
     SkillRolledBack,
     SkillValidated,
 )
+from forge.domain.governance import ActorType, AuditRecord
 from forge.domain.repositories import Clock, UnitOfWork, UnitOfWorkFactory
 from forge.domain.skill import CycleStatus, LearningCycle, LearningError, SkillStatus, SkillVersion
 from forge.evaluation import benchmarks
@@ -245,7 +246,9 @@ async def advance(uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID) 
     return cycle
 
 
-async def promote(uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID) -> LearningCycle:
+async def promote(
+    uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID, *, operator: str
+) -> LearningCycle:
     """Operator action: make the validated candidate the agent's current version."""
     now = clock.now()
     async with uow_factory() as uow:
@@ -268,6 +271,18 @@ async def promote(uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID) 
         await uow.skills.update(skill.transition(SkillStatus.PROMOTED))
         await uow.agents.set_current(cycle.agent_id, candidate.version)
         cycle = await uow.learning.update(cycle.transition(CycleStatus.PROMOTED, now))
+        await uow.audit.add(
+            AuditRecord(
+                actor=operator,
+                actor_type=ActorType.OPERATOR,
+                action="skill.promote",
+                decision="promoted",
+                occurred_at=now,
+                agent_id=cycle.agent_id,
+                target=f"{skill.name}@{skill.version}",
+                details={"cycle": str(cycle.id), "agent_version": candidate.version},
+            )
+        )
         await _emit(
             uow,
             [
@@ -287,7 +302,13 @@ async def promote(uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID) 
 
 
 async def rollback(
-    uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID, *, reason: str
+    uow_factory: UnitOfWorkFactory,
+    clock: Clock,
+    cycle_id: UUID,
+    *,
+    reason: str,
+    actor: str,
+    actor_type: ActorType = ActorType.OPERATOR,
 ) -> LearningCycle:
     """Restore the agent version that preceded the promotion."""
     now = clock.now()
@@ -307,6 +328,19 @@ async def rollback(
         cycle = await uow.learning.update(
             cycle.transition(
                 CycleStatus.ROLLED_BACK, now, delta={**cycle.delta, "rollback_reason": reason}
+            )
+        )
+        await uow.audit.add(
+            AuditRecord(
+                actor=actor,
+                actor_type=actor_type,
+                action="skill.rollback",
+                decision="rolled_back",
+                occurred_at=now,
+                agent_id=cycle.agent_id,
+                target=f"{skill.name}@{skill.version}",
+                reason=reason,
+                details={"cycle": str(cycle.id), "restored_agent_version": baseline.version},
             )
         )
         await _emit(
@@ -355,6 +389,8 @@ async def monitor(uow_factory: UnitOfWorkFactory, clock: Clock, cycle_id: UUID) 
             clock,
             cycle_id,
             reason=f"live correctness {live:.2f} fell below validated {expected:.2f}",
+            actor="learning.monitor",
+            actor_type=ActorType.SYSTEM,
         )
     return cycle
 

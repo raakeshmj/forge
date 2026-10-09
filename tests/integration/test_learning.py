@@ -140,7 +140,7 @@ async def test_validated_learning_produces_a_measurable_learning_delta(uow: UowF
     assert target >= 0.2  # offline A/B: candidate minus baseline on gap and held-out cases
     assert current_before_promotion.skills == ()  # validation never touched production
 
-    promoted = await cycle.promote(uow, CLOCK, cycle_id)
+    promoted = await cycle.promote(uow, CLOCK, cycle_id, operator="alice")
     async with uow() as tx:
         current = await tx.agents.get_current_version(agent_id)
         assert validated.skill is not None
@@ -156,7 +156,9 @@ async def test_validated_learning_produces_a_measurable_learning_delta(uow: UowF
     assert after["pass_rate"] == 1.0
     assert learning_delta == pytest.approx(2 / 3, abs=1e-3)
 
-    await cycle.rollback(uow, CLOCK, cycle_id, reason="operator verification of rollback")
+    await cycle.rollback(
+        uow, CLOCK, cycle_id, reason="operator verification of rollback", actor="alice"
+    )
     restored = await benchmark(uow, agent_id)
     async with uow() as tx:
         kinds = [e.event_type for e in await tx.events.list_for_aggregate(cycle_id)]
@@ -228,7 +230,7 @@ async def test_unsafe_generated_skills_are_rejected_before_any_validation_run(
     assert rejected.status is CycleStatus.REJECTED
     assert rejected.baseline_run_id is None
     with pytest.raises(LearningError):
-        await cycle.promote(uow, CLOCK, rejected.id)
+        await cycle.promote(uow, CLOCK, rejected.id, operator="alice")
 
 
 async def test_a_skill_that_does_not_help_fails_validation(uow: UowFactory) -> None:
@@ -250,7 +252,7 @@ async def test_monitoring_rolls_back_a_promotion_that_regresses_in_production(
     agent_id = await baseline_agent(uow)
     await benchmark(uow, agent_id)
     cycle_id = await validated_cycle(uow, agent_id, DeterministicSkillGenerator())
-    await cycle.promote(uow, CLOCK, cycle_id)
+    await cycle.promote(uow, CLOCK, cycle_id, operator="alice")
 
     await benchmark(uow, agent_id, AlwaysWrong())  # live performance collapses
     await worker.step(uow, CLOCK, generator=DeterministicSkillGenerator(), auto_detect=False)
@@ -272,4 +274,4 @@ async def test_promotion_requires_a_validated_cycle_on_an_unchanged_agent(uow: U
         await tx.agents.set_current(agent_id, versions[-1].version)  # someone changed the agent
 
     with pytest.raises(LearningError, match="changed since validation"):
-        await cycle.promote(uow, CLOCK, cycle_id)
+        await cycle.promote(uow, CLOCK, cycle_id, operator="alice")

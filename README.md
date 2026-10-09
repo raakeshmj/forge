@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-7 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, and controlled learning (validated, reversible skill promotion). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-8 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -16,7 +16,7 @@ make install           # create .venv from uv.lock
 make check             # lint, types, import boundaries, unit tests
 make up                # build and start Postgres, Redis, migrations, API; waits until healthy
 make test-integration  # integration, recovery, and migration tests against the running stack
-make e2e               # Phase 1 demo: SIGKILLs the worker mid-mission and resumes it
+make e2e               # demos: worker SIGKILL + resume, planned fan-out, approval across a worker kill
 curl localhost:18000/health/ready
 make down              # stop and delete volumes
 ```
@@ -73,6 +73,44 @@ and remote API tools are declared in a JSON file named by `FORGE_TOOL_CONFIG`
 (format in `src/forge/tools/config.py`); credentials are referenced by name and
 read from `FORGE_SECRET_<NAME>` at execution time. `GET /tools` shows each
 tool's pinned version and status; `POST /tools/{name}/pin` approves a changed one.
+A credential resolves only for the agents listed under `credential_grants`.
+
+## Governance
+
+Every tool call passes identity → permission → validation → risk → governance →
+execution → audit ([`docs/decisions/0010`](docs/decisions/0010-governance-approvals-and-audit.md)).
+
+| Risk | What happens |
+|---|---|
+| LOW | Runs |
+| MEDIUM | Runs only if a policy allows it |
+| HIGH | Waits for a human approval of that exact call |
+| CRITICAL | Denied unless an operator enables the tool, and then also needs approval |
+
+Humans are operators configured on the API with `FORGE_OPERATOR_TOKENS=name:token,...`
+(tokens of 32 or more characters). Writes require `Authorization: Bearer <token>`:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /approvals/{id}/decision` | Approve or deny a request |
+| `POST /policies` | Write a new policy version |
+| `POST /tools/{name}/critical` | Enable or disable a CRITICAL tool |
+| `POST /tools/{name}/pin` | Pin a changed tool version |
+| `POST /learning/cycles/{id}/promote`, `/rollback` | Promote or roll back a skill |
+
+```sh
+export FORGE_OPERATOR_TOKENS="alice:$(openssl rand -hex 24)"  # then `make up`
+curl -s 'localhost:18000/approvals?status=PENDING' | jq   # action, rationale, evidence, expiry
+curl -s -X POST localhost:18000/approvals/$id/decision -H "Authorization: Bearer ${FORGE_OPERATOR_TOKENS#*:}" \
+  -H 'content-type: application/json' -d '{"decision": "approve", "reason": "on-call approved"}'
+curl -s "localhost:18000/audit?mission_id=$mission" | jq  # append-only audit trail
+```
+
+The demo worker registers a simulated HIGH-risk `deployment.rollback` tool. Give
+an agent `["metrics.read", "deployment.rollback"]` and the mission
+`"max_risk": "HIGH"`, and the demo investigator will ask to roll back checkout.
+A waiting execution holds no worker. Approvals expire after
+`FORGE_APPROVAL_TTL_SECONDS` (default 86400).
 
 ## Local services
 
@@ -96,6 +134,8 @@ The credentials in `compose.yaml` are development defaults only.
 | `FORGE_OTEL_EXPORTER` | no | `none` (`console`, or `otlp` using the standard `OTEL_EXPORTER_OTLP_*` variables) |
 | `FORGE_WORKER_ID` | no | `<hostname>-<pid>` |
 | `FORGE_WORKER_LEASE_SECONDS` / `FORGE_WORKER_POLL_SECONDS` | no | `30` / `1` |
+| `FORGE_OPERATOR_TOKENS` (API) | no | none: no one can approve, write policy, pin, or promote |
+| `FORGE_APPROVAL_TTL_SECONDS` (worker) | no | `86400` |
 
 The worker needs only `FORGE_DATABASE_URL`. Run the processes outside Docker with
 `uv run python -m forge.api` and `uv run python -m forge.runtime`.
@@ -118,6 +158,10 @@ src/forge/
   runtime/          # durable agent loop and worker (python -m forge.runtime)
   inference/        # model port, pricing, deterministic demo model
   tools/            # tool port, authorization pipeline, native tools
+  security/         # egress, secrets, approvals, policy and CRITICAL writes
+  evaluation/       # evaluators, benchmarks, evaluation worker
+  capabilities/     # capability graph, competency, reliability, fitness
+  learning/         # failure analysis, gaps, skill generation, validation, promotion
   api/              # FastAPI adapter and composition root (python -m forge.api)
   infrastructure/   # PostgreSQL unit of work, Redis, migrations
   observability/    # structured logging, OpenTelemetry tracing

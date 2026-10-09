@@ -1,6 +1,8 @@
 """A deterministic stand-in provider for demos and tests (ADR 0004).
 
 `demo-investigator-1`: Model (requests metrics.read) -> Tool -> Model (concludes).
+When `deployment.rollback` is offered and the metrics show a regression after the
+deploy, it requests one rollback first, then concludes with its outcome.
 `demo-planner-1`: answers a planning brief with a fixed incident-investigation plan
 (two parallel evidence tasks fanning in to a correlation task).
 It reports usage like a real provider, including explicit prefix caching: the
@@ -30,6 +32,7 @@ from forge.inference.profiles import DEMO_MODEL, DEMO_PLANNER, PROFILES
 from forge.inference.tokens import estimate_text
 
 METRICS_TOOL = "metrics.read"
+ROLLBACK_TOOL = "deployment.rollback"
 CACHE_TTL_SECONDS = 300.0
 DEMO_PLAN = json.dumps(
     {
@@ -87,11 +90,22 @@ class DemoInvestigationModel:
                 ),
             )
             stop_reason = "tool_use"
+        elif ROLLBACK_TOOL in tool_names and _wants_rollback(request, results):
+            turn = sum(1 for message in request.messages if message.role is Role.ASSISTANT)
+            content = (
+                TextBlock("checkout regressed right after the deploy; requesting a rollback."),
+                ToolUseBlock(
+                    id=f"call_{turn}_0",
+                    name=ROLLBACK_TOOL,
+                    arguments={"service": "checkout", "reason": "p95 regressed after 14:05 deploy"},
+                ),
+            )
+            stop_reason = "tool_use"
         elif _follows_service_skill(request):
             content = (TextBlock(_analysed_conclusion(_named_service(request), results)),)
             stop_reason = "end_turn"
         else:
-            content = (TextBlock(_conclusion(results)),)
+            content = (TextBlock(_conclusion(request, results)),)
             stop_reason = "end_turn"
         output = sum(estimate_text(json.dumps(block_to_json(b), sort_keys=True)) for b in content)
         return ModelResponse(
@@ -193,12 +207,32 @@ def _analysed_conclusion(service: str, results: list[ToolResultBlock]) -> str:
     )
 
 
-def _conclusion(results: list[ToolResultBlock]) -> str:
-    usable = [result for result in results if not result.is_error]
-    if not usable:
+def _rollback_ids(request: ModelRequest) -> set[str]:
+    return {
+        block.id
+        for message in request.messages
+        for block in message.content
+        if isinstance(block, ToolUseBlock) and block.name == ROLLBACK_TOOL
+    }
+
+
+def _wants_rollback(request: ModelRequest, results: list[ToolResultBlock]) -> bool:
+    """Once only: a regression after the deploy, and no rollback requested yet."""
+    if _rollback_ids(request):
+        return False
+    return any(not r.is_error and "deploy 14:10=880" in r.content for r in results)
+
+
+def _conclusion(request: ModelRequest, results: list[ToolResultBlock]) -> str:
+    rollbacks = _rollback_ids(request)
+    metrics = [r for r in results if not r.is_error and r.tool_use_id not in rollbacks]
+    remediation = [r for r in results if r.tool_use_id in rollbacks]
+    if not metrics:
         return "Conclusion: insufficient evidence; no metrics were available. Confidence: 0.2"
+    outcome = f"Remediation: {remediation[-1].content}\n" if remediation else ""
     return (
         "Conclusion: checkout p95 latency regressed after the latest deployment.\n"
-        f"Evidence: {usable[-1].content}\n"
+        f"Evidence: {metrics[-1].content}\n"
+        f"{outcome}"
         "Confidence: 0.8"
     )

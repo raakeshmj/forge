@@ -17,7 +17,12 @@ from forge.domain.tool import (
     ToolVersionRecord,
     definition_sha256,
 )
-from forge.security.secrets import EnvSecretResolver, SecretUnavailableError, redact
+from forge.security.secrets import (
+    EnvSecretResolver,
+    SecretNotGrantedError,
+    SecretUnavailableError,
+    redact,
+)
 from forge.tools.base import ToolContext
 from forge.tools.pipeline import Stage, authorize
 from forge.tools.registry import quarantine_reason
@@ -37,11 +42,14 @@ SCHEMA = {
 
 
 def test_secrets_resolve_from_the_environment_and_never_echo_values() -> None:
-    resolver = EnvSecretResolver({"FORGE_SECRET_STATUS_API": "s3cr3t"})
+    resolver = EnvSecretResolver(
+        {"FORGE_SECRET_STATUS_API": "s3cr3t"},
+        grants={"status_api": frozenset({"investigator"}), "missing": frozenset({"investigator"})},
+    )
 
-    assert resolver.resolve("status_api") == "s3cr3t"
+    assert resolver.resolve("status_api", agent="investigator") == "s3cr3t"
     with pytest.raises(SecretUnavailableError) as excinfo:
-        resolver.resolve("missing")
+        resolver.resolve("missing", agent="investigator")
     assert "s3cr3t" not in str(excinfo.value)
     assert redact("token=s3cr3t; again s3cr3t", ("s3cr3t",)) == "token=[REDACTED]; again [REDACTED]"
 
@@ -143,3 +151,18 @@ def test_failed_or_malformed_search_results_load_nothing() -> None:
 
 
 NOW_ID = factories.mission().id
+
+
+def test_a_secret_resolves_only_for_agents_it_is_granted_to() -> None:
+    resolver = EnvSecretResolver(
+        {"FORGE_SECRET_STATUS_API": "s3cr3t"}, grants={"status_api": frozenset({"investigator"})}
+    )
+
+    for agent in ("planner", "", "investigator2"):
+        with pytest.raises(SecretNotGrantedError) as excinfo:
+            resolver.resolve("status_api", agent=agent)
+        assert "s3cr3t" not in str(excinfo.value)
+    with pytest.raises(SecretNotGrantedError):  # no grants configured: nobody
+        EnvSecretResolver({"FORGE_SECRET_STATUS_API": "s3cr3t"}).resolve(
+            "status_api", agent="investigator"
+        )

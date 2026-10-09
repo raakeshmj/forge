@@ -278,20 +278,22 @@ async def test_cancellation_racing_the_final_answer_wins(uow: UowFactory) -> Non
 # --- Tool authorization ------------------------------------------------------------------
 
 
-async def test_high_risk_tool_is_denied_without_approval_and_never_runs(uow: UowFactory) -> None:
-    restart = RecordingTool(name="deployment.restart", risk=RiskLevel.HIGH)
-    model = ScriptedModel(tool_call("deployment.restart"), answer("could not restart"))
-    mission_id = await submit(uow, tools=("deployment.restart",), max_risk=RiskLevel.HIGH)
+async def test_medium_risk_tool_without_an_allowing_policy_is_denied_and_never_runs(
+    uow: UowFactory,
+) -> None:
+    write = RecordingTool(name="ticket.comment", risk=RiskLevel.MEDIUM)
+    model = ScriptedModel(tool_call("ticket.comment"), answer("could not comment"))
+    mission_id = await submit(uow, tools=("ticket.comment",), max_risk=RiskLevel.MEDIUM)
 
-    final = await run_next(runtime(uow, model, restart))
+    final = await run_next(runtime(uow, model, write))
 
     assert final.status is ExecutionStatus.COMPLETED
-    assert restart.invocations == []
-    assert model.requests[0].tools == ()  # never offered: it could not be authorized
+    assert write.invocations == []
+    assert model.requests[0].tools == ()  # never offered: no policy could allow it
     (result,) = tool_results(model.requests[1])
     assert result.is_error
     denied = await payloads(uow, mission_id, "tool.denied")
-    assert [(p["tool"], p["stage"]) for p in denied] == [("deployment.restart", "policy")]
+    assert [(p["tool"], p["stage"]) for p in denied] == [("ticket.comment", "policy")]
 
 
 async def test_tool_outside_the_agents_bindings_is_denied(uow: UowFactory) -> None:

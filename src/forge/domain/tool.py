@@ -154,3 +154,9 @@ def tool_aggregate_id(name: str) -> UUID:
 
 
 _TOOL_NAMESPACE = UUID("0b6c2d0e-7a8f-4f6e-9c43-5d2b1a7e9f10")
+
+
+def arguments_sha256(arguments: Mapping[str, JSONValue]) -> str:
+    """Canonical fingerprint of a call's arguments (audit, approval binding)."""
+    canonical = json.dumps(dict(arguments), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()

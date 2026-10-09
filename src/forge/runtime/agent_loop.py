@@ -8,12 +8,11 @@ checkpoint, so committed work is never repeated.
 """
 
 import asyncio
-import hashlib
-import json
 import logging
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import timedelta
 from uuid import uuid4
 
 from forge.domain.agent import AgentVersion, ModelRef
@@ -36,8 +35,16 @@ from forge.domain.events import (
     ToolFailed,
 )
 from forge.domain.execution import Execution, ExecutionStatus, FailureKind
+from forge.domain.governance import ActorType, Approval, ApprovalStatus, AuditRecord
 from forge.domain.mission import Mission
-from forge.domain.model import ModelRequest, ModelResponse, Role, ToolResultBlock, ToolUseBlock
+from forge.domain.model import (
+    ModelRequest,
+    ModelResponse,
+    Role,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from forge.domain.repositories import Clock, UnitOfWork, UnitOfWorkFactory
 from forge.domain.skill import SkillVersion
 from forge.domain.task import Task, TaskStatus
@@ -45,6 +52,7 @@ from forge.domain.tool import (
     InvocationStatus,
     ToolDefinition,
     ToolInvocation,
+    arguments_sha256,
     idempotency_key,
 )
 from forge.inference.client import ModelCallError, ModelClient
@@ -62,6 +70,7 @@ from forge.inference.tokens import estimate_messages
 from forge.observability import tracing
 from forge.observability.logs import correlation_id
 from forge.orchestration import budget, missions
+from forge.security import approvals
 from forge.tools import pipeline
 from forge.tools.base import Tool, ToolContext
 from forge.tools.search import loaded_tools
@@ -84,6 +93,7 @@ class Runtime:
     worker_id: str
     lease_seconds: float
     max_attempts: int = 5  # claims of one execution before recovery is declared exhausted
+    approval_ttl_seconds: float = 86_400.0  # how long a human has to decide (ADR 0010)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +105,18 @@ class Claim:
 async def claim_next(runtime: Runtime) -> Claim | None:
     """Take over an execution whose lease expired, else start the oldest READY task."""
     now = runtime.clock.now()
+    async with runtime.uow_factory() as uow:
+        await approvals.expire_due(uow, now)  # durable timer, evaluated on every claim
+    async with runtime.uow_factory() as uow:
+        resumed = await uow.executions.reclaim_decided(
+            worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
+        )
+        if resumed is not None:
+            execution, fence = resumed
+            await missions.unblock_task(uow, execution.task_id, now)
+            mission = await uow.missions.get(execution.mission_id)
+            await _append(uow, mission, _started(execution, runtime.worker_id))
+            return Claim(execution, fence)
     async with runtime.uow_factory() as uow:
         reclaimed = await uow.executions.reclaim_expired(
             worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
@@ -117,7 +139,11 @@ async def claim_next(runtime: Runtime) -> Claim | None:
         mission = await uow.missions.get(task.mission_id)
         initial = AgentState.initial(await missions.task_brief(uow, task))
         skills = tuple([await uow.skills.get(ref.name, ref.version) for ref in version.skills])
-        decision, required_tokens = _route(runtime, version, task, mission, initial, skills)
+        agent_name = (await uow.agents.get(task.agent_id)).name
+        governance = await governance_snapshot(uow)
+        decision, required_tokens = _route(
+            runtime, version, task, mission, initial, skills, governance, agent_name
+        )
         execution = Execution(
             id=uuid4(),
             mission_id=task.mission_id,
@@ -159,15 +185,36 @@ async def claim_next(runtime: Runtime) -> Claim | None:
 
 
 def authorized_tools(
-    runtime: Runtime, version: AgentVersion, task: Task, mission: Mission
+    runtime: Runtime,
+    version: AgentVersion,
+    task: Task,
+    mission: Mission,
+    governance: pipeline.Governance,
+    agent_name: str,
 ) -> tuple[ToolDefinition, ...]:
-    """Every tool a call could be authorized for, sorted by name; the pipeline still checks."""
+    """Every tool a call could be authorized for, sorted by name; the pipeline still checks.
+
+    Tools that could pass only with a human approval are included: the model may ask.
+    """
     return tuple(
         runtime.tools[name].definition
         for name in sorted(runtime.tools)
         if pipeline.authorize(
-            name, tools=runtime.tools, version=version, task=task, mission=mission
+            name,
+            tools=runtime.tools,
+            version=version,
+            task=task,
+            mission=mission,
+            agent_name=agent_name,
+            governance=governance,
         ).allowed
+    )
+
+
+async def governance_snapshot(uow: UnitOfWork) -> pipeline.Governance:
+    """Active policies and CRITICAL enablements, read once per step (ADR 0010)."""
+    return pipeline.Governance(
+        policies=tuple(await uow.policies.active()), critical_enabled=await uow.critical.enabled()
     )
 
 
@@ -176,13 +223,15 @@ def exposed_tools(
     version: AgentVersion,
     task: Task,
     mission: Mission,
+    governance: pipeline.Governance,
+    agent_name: str,
     state: AgentState | None = None,
 ) -> tuple[ToolDefinition, ...]:
     """Eager tools, then deferred tools in the order `tools.search` loaded them (ADR 0005).
 
     Loaded tools are appended, never interleaved, so earlier tools keep their positions.
     """
-    authorized = authorized_tools(runtime, version, task, mission)
+    authorized = authorized_tools(runtime, version, task, mission, governance, agent_name)
     by_name = {tool.name: tool for tool in authorized}
     loaded = loaded_tools(state) if state is not None else ()
     return (
@@ -198,9 +247,11 @@ def _route(
     mission: Mission,
     state: AgentState,
     skills: tuple[SkillVersion, ...],
+    governance: pipeline.Governance,
+    agent_name: str,
 ) -> tuple[RoutingDecision, int]:
     """Choose the execution's model once, before any context is built (ARCHITECTURE §10)."""
-    tools = exposed_tools(runtime, version, task, mission)
+    tools = exposed_tools(runtime, version, task, mission, governance, agent_name)
     inputs = PlanningInputs(version, mission, tools, state.messages, skills)
     required = sum(b.token_estimate for b in stable_blocks(inputs)) + estimate_messages(
         inputs.messages
@@ -227,6 +278,8 @@ class ExecutionRunner:
     _correlation_id: str
     _plan: ContextPlan
     _skills: tuple[SkillVersion, ...]
+    _agent_name: str
+    _governance: pipeline.Governance  # refreshed at every step
 
     def __init__(self, runtime: Runtime, claim: Claim) -> None:
         self._rt = runtime
@@ -239,6 +292,7 @@ class ExecutionRunner:
             mission = await uow.missions.get(self._execution.mission_id)
             self._task = await uow.tasks.get(self._execution.task_id)
             self._version = await uow.agents.get_version(self._execution.agent_version_id)
+            self._agent_name = (await uow.agents.get(self._execution.agent_id)).name
             self._skills = tuple(
                 [await uow.skills.get(ref.name, ref.version) for ref in self._version.skills]
             )
@@ -278,6 +332,7 @@ class ExecutionRunner:
                 mission = await uow.missions.get(self._execution.mission_id)
                 task = await uow.tasks.get(self._execution.task_id)
                 spent = await uow.executions.mission_spend(mission.id)
+                self._governance = await governance_snapshot(uow)
             if mission.status.is_terminal or task.status is TaskStatus.CANCELLED:
                 return await self._cancel()  # cancelled, or another task already decided it
             if mission.deadline_passed(self._rt.clock.now()):
@@ -317,7 +372,15 @@ class ExecutionRunner:
         inputs = PlanningInputs(
             self._version,
             mission,
-            exposed_tools(self._rt, self._version, self._task, mission, self._state),
+            exposed_tools(
+                self._rt,
+                self._version,
+                self._task,
+                mission,
+                self._governance,
+                self._agent_name,
+                self._state,
+            ),
             self._state.messages,
             self._skills,
         )
@@ -481,14 +544,25 @@ class ExecutionRunner:
     async def _tool_step(self, call: ToolUseBlock, mission: Mission) -> Execution | None:
         turn = self._state.turns - 1  # pending calls always belong to the latest model turn
         key = idempotency_key(self._execution.id, turn, call.id)
+        async with self._rt.uow_factory() as uow:
+            governance = replace(
+                await governance_snapshot(uow),
+                approval=await uow.approvals.latest_for_key(key),
+                idempotency_key=key,
+                now=self._rt.clock.now(),
+            )
         decision = pipeline.authorize(
             call.name,
             tools=self._rt.tools,
             version=self._version,
             task=self._task,
             mission=mission,
+            agent_name=self._agent_name,
             arguments=call.arguments,
+            governance=governance,
         )
+        if decision.requires_approval:
+            return await self._await_approval(call, key, mission, governance)
         with tracing.tracer().start_as_current_span(
             "forge.tool.call",
             attributes={
@@ -525,9 +599,17 @@ class ExecutionRunner:
                 execution_id=self._execution.id,
                 mission_id=self._execution.mission_id,
                 agent_id=self._execution.agent_id,
+                agent_name=self._agent_name,
                 discoverable=tuple(
                     tool
-                    for tool in authorized_tools(self._rt, self._version, self._task, mission)
+                    for tool in authorized_tools(
+                        self._rt,
+                        self._version,
+                        self._task,
+                        mission,
+                        self._governance,
+                        self._agent_name,
+                    )
                     if tool.deferred and tool.name not in loaded
                 ),
             )
@@ -575,6 +657,56 @@ class ExecutionRunner:
         await self._commit(state, execution, [event], ledger=(invocation.idempotency_key, status))
         return None
 
+    async def _await_approval(
+        self, call: ToolUseBlock, key: str, mission: Mission, governance: pipeline.Governance
+    ) -> Execution:
+        """Durably wait for a human: record the request, release the worker (ADR 0010)."""
+        now = self._rt.clock.now()
+        last_assistant = [m for m in self._state.messages if m.role is Role.ASSISTANT][-1]
+        rationale = "".join(b.text for b in last_assistant.content if isinstance(b, TextBlock))
+        evidence = tuple(
+            b.tool_use_id
+            for m in self._state.messages
+            for b in m.content
+            if isinstance(b, ToolResultBlock)
+        )
+        existing = governance.approval
+        suspended = self._execution.suspend()
+        async with self._rt.uow_factory() as uow:
+            await uow.executions.update(suspended, fence=self._fence, lease_seconds=0)
+            if existing is None or existing.status is not ApprovalStatus.PENDING:
+                await approvals.request(
+                    uow,
+                    Approval(
+                        id=uuid4(),
+                        mission_id=mission.id,
+                        task_id=self._task.id,
+                        execution_id=self._execution.id,
+                        idempotency_key=key,
+                        agent_id=self._execution.agent_id,
+                        tool=call.name,
+                        arguments=dict(call.arguments),
+                        arguments_sha256=arguments_sha256(call.arguments),
+                        rationale=rationale[:2_000],
+                        evidence=evidence,
+                        affected_resources=tuple(
+                            f"{name}={value}"
+                            for name, value in sorted(call.arguments.items())
+                            if isinstance(value, str)
+                        ),
+                        risk=self._rt.tools[call.name].definition.risk.value,
+                        status=ApprovalStatus.PENDING,
+                        expires_at=now + timedelta(seconds=self._rt.approval_ttl_seconds),
+                        requested_at=now,
+                    ),
+                    self._correlation_id,
+                )
+            await missions.block_task(uow, self._task.id, now)
+        self.finished = True  # no lease to release: the execution is parked, not crashed
+        self._execution = suspended
+        _log.info("awaiting approval", extra={"execution_id": str(suspended.id), "tool": call.name})
+        return suspended
+
     async def _deny(self, call: ToolUseBlock, decision: pipeline.Decision) -> None:
         stage = decision.stage.value if decision.stage else "unknown"
         denied = ToolDenied(
@@ -584,12 +716,29 @@ class ExecutionRunner:
             tool=call.name,
             stage=stage,
             reason=decision.reason,
-            arguments_sha256=arguments_digest(call),
+            arguments_sha256=arguments_sha256(call.arguments),
         )
         result = ToolResultBlock(
             call.id, f"Tool call denied at {stage}: {decision.reason}", is_error=True
         )
-        await self._commit(self._state.with_tool_result(result), self._execution, [denied])
+        audit = self._audit(call, f"denied:{stage}", decision.reason)
+        await self._commit(
+            self._state.with_tool_result(result), self._execution, [denied], audit=audit
+        )
+
+    def _audit(self, call: ToolUseBlock, decision: str, reason: str = "") -> AuditRecord:
+        return AuditRecord(
+            actor=self._agent_name,
+            actor_type=ActorType.AGENT,
+            action="tool.execute",
+            decision=decision,
+            occurred_at=self._rt.clock.now(),
+            agent_id=self._execution.agent_id,
+            mission_id=self._execution.mission_id,
+            tool=call.name,
+            reason=reason,
+            arguments_sha256=arguments_sha256(call.arguments),
+        )
 
     async def _record_intent(
         self, call: ToolUseBlock, turn: int, key: str, definition: ToolDefinition
@@ -599,6 +748,7 @@ class ExecutionRunner:
             await uow.executions.update(
                 self._execution, fence=self._fence, lease_seconds=self._rt.lease_seconds
             )
+            await uow.audit.add(self._audit(call, "allowed"))
             invocation = await uow.tool_invocations.record_intent(
                 ToolInvocation(
                     idempotency_key=key,
@@ -623,7 +773,7 @@ class ExecutionRunner:
                         tool_version=definition.version,
                         idempotency_key=key,
                         invocation=invocation.invocations,
-                        arguments_sha256=arguments_digest(call),
+                        arguments_sha256=arguments_sha256(call.arguments),
                     )
                 ],
             )
@@ -638,8 +788,9 @@ class ExecutionRunner:
         events: Sequence[DomainEvent],
         *,
         ledger: tuple[str, InvocationStatus] | None = None,
+        audit: AuditRecord | None = None,
     ) -> None:
-        """One step: fenced execution update, next checkpoint, events. All or nothing."""
+        """One step: fenced execution update, next checkpoint, events, audit. All or nothing."""
         sequence = self._sequence + 1
         async with self._rt.uow_factory() as uow:
             await uow.executions.update(
@@ -648,6 +799,8 @@ class ExecutionRunner:
             if ledger is not None:
                 await uow.tool_invocations.record_outcome(*ledger)
             await budget.release(uow, execution.id)  # actual spend is now recorded
+            if audit is not None:
+                await uow.audit.add(audit)
             await self._write_checkpoint(uow, state, sequence, events)
         self._state, self._execution, self._sequence = state, execution, sequence
 
@@ -725,6 +878,8 @@ class ExecutionRunner:
                 final = self._execution.cancel(now)
             await uow.executions.update(final, fence=self._fence, lease_seconds=0)
             await budget.release(uow, final.id)
+            # anything still awaiting a human can no longer run
+            await approvals.withdraw(uow, final.id, f"the execution ended {final.status}", now)
             if state is not None:
                 await self._write_checkpoint(uow, state, self._sequence + 1, events)
                 events = ()
@@ -753,12 +908,6 @@ class ExecutionRunner:
     ) -> None:
         for event in events:
             await uow.events.append(event, correlation_id=self._correlation_id)
-
-
-def arguments_digest(call: ToolUseBlock) -> str:
-    """Audit fingerprint of a call's arguments; the arguments themselves stay in the checkpoint."""
-    canonical = json.dumps(dict(call.arguments), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _started(execution: Execution, worker_id: str) -> AgentStarted:

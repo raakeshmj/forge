@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from forge.domain.common import DomainError
 from forge.domain.events import ToolPinned, ToolQuarantined, ToolRegistered
+from forge.domain.governance import ActorType, AuditRecord
 from forge.domain.repositories import Clock, NotFoundError, UnitOfWork, UnitOfWorkFactory
 from forge.domain.tool import (
     RegisteredTool,
@@ -62,7 +63,7 @@ async def sync(
 
 
 async def pin(
-    uow_factory: UnitOfWorkFactory, clock: Clock, name: str, version: str
+    uow_factory: UnitOfWorkFactory, clock: Clock, name: str, version: str, *, operator: str
 ) -> RegisteredTool:
     """Operator approval of a (possibly changed) tool version."""
     async with uow_factory() as uow:
@@ -73,6 +74,18 @@ async def pin(
             name, version, record.definition_sha256, ToolStatus.ACTIVE, "", clock.now()
         )
         await uow.tool_registry.save(tool)
+        await uow.audit.add(
+            AuditRecord(
+                actor=operator,
+                actor_type=ActorType.OPERATOR,
+                action="tool.pin",
+                decision="pinned",
+                occurred_at=tool.updated_at,
+                tool=name,
+                target=f"{name}@{version}",
+                details={"definition_sha256": record.definition_sha256},
+            )
+        )
         await uow.events.append(
             ToolPinned(
                 aggregate_id=tool_aggregate_id(name),

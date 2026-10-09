@@ -264,6 +264,8 @@ A controlled experiment demonstrates measurable improvement after validated skil
 
 # PHASE 8 — GOVERNANCE
 
+Status: implemented. Decisions: `docs/decisions/0010`.
+
 ## Objective
 
 Safely execute higher-risk actions.

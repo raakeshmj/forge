@@ -10,7 +10,12 @@ from forge.domain.common import JSONValue
 from forge.domain.risk import RiskLevel
 from forge.domain.tool import Idempotency, ToolDefinition, ToolResult, ToolSource
 from forge.security import egress
-from forge.security.secrets import SecretResolver, redact
+from forge.security.secrets import (
+    SecretNotGrantedError,
+    SecretResolver,
+    SecretUnavailableError,
+    redact,
+)
 from forge.tools.base import ToolContext, ToolExecutionError
 
 MAX_RESPONSE_BYTES = 32 * 1024
@@ -81,7 +86,10 @@ class HttpApiTool:
         secrets: tuple[str, ...] = ()
         headers = {"Host": target.host, "Accept": "application/json, text/plain"}
         if self._config.credential is not None:
-            secret = self._secrets.resolve(self._config.credential)
+            try:
+                secret = self._secrets.resolve(self._config.credential, agent=context.agent_name)
+            except (SecretNotGrantedError, SecretUnavailableError) as exc:
+                raise ToolExecutionError(str(exc), retryable=False) from exc
             secrets = (secret,)
             headers[self._config.credential_header] = self._config.credential_prefix + secret
 

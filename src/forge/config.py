@@ -28,6 +28,8 @@ class ApiSettings:
     # Connection URLs can embed credentials; keep them out of repr() and therefore out of logs.
     database_url: str = field(repr=False)
     redis_url: str = field(repr=False)
+    # token -> operator name; humans who may approve, write policy, promote (ADR 0010)
+    operator_tokens: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ApiSettings":
@@ -44,6 +46,7 @@ class ApiSettings:
             readiness_timeout_seconds=reader.positive("FORGE_READINESS_TIMEOUT_SECONDS", 2.0),
             database_url=reader.required("FORGE_DATABASE_URL"),
             redis_url=reader.required("FORGE_REDIS_URL"),
+            operator_tokens=reader.operator_tokens(),
         )
         reader.raise_if_invalid()
         return settings
@@ -61,6 +64,7 @@ class WorkerSettings:
     tool_config_path: str | None = None  # MCP servers and remote API tools (ADR 0005)
     concurrency: int = 1  # parallel claim loops in this process (ADR 0006)
     learning_auto: bool = False  # start learning cycles on detected gaps (ADR 0009)
+    approval_ttl_seconds: float = 86_400.0  # time a human has to decide (ADR 0010)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -83,6 +87,7 @@ class WorkerSettings:
             tool_config_path=reader.optional("FORGE_TOOL_CONFIG"),
             concurrency=reader.integer("FORGE_WORKER_CONCURRENCY", default=1),
             learning_auto=reader.text("FORGE_LEARNING_AUTO", default="false").lower() == "true",
+            approval_ttl_seconds=reader.positive("FORGE_APPROVAL_TTL_SECONDS", 86_400.0),
         )
         reader.raise_if_invalid()
         return settings
@@ -148,6 +153,22 @@ class _Reader:
         if value <= 0:
             self.errors.append(f"{name} must be positive, got {value}")
         return value
+
+    def operator_tokens(self) -> dict[str, str]:
+        """`FORGE_OPERATOR_TOKENS=alice:<token>,bob:<token>`; tokens of at least 32 characters."""
+        tokens: dict[str, str] = {}
+        raw = self._source.get("FORGE_OPERATOR_TOKENS", "")
+        for index, entry in enumerate(e.strip() for e in raw.split(",") if e.strip()):
+            name, _, token = entry.partition(":")
+            if not name or len(token) < 32 or token in tokens:
+                # never echo the entry: it holds a credential
+                self.errors.append(
+                    f"FORGE_OPERATOR_TOKENS entry {index + 1} must be name:token with a unique "
+                    "token of at least 32 characters"
+                )
+                continue
+            tokens[token] = name
+        return tokens
 
     def raise_if_invalid(self) -> None:
         if self.errors:

@@ -9,6 +9,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -321,4 +322,68 @@ learning_cycles = Table(
     _ts("created_at"),
     _ts("updated_at"),
     Column("row_version", Integer, nullable=False),
+)
+
+policies = Table(
+    "policies",
+    metadata,
+    Column("name", Text, primary_key=True),
+    Column("version", Integer, primary_key=True),
+    Column("rules", JSONB, nullable=False),
+    Column("created_by", Text, nullable=False),
+    _ts("created_at"),
+)
+
+approvals = Table(
+    "approvals",
+    metadata,
+    _uuid("id", primary_key=True),
+    _uuid("mission_id"),
+    _uuid("task_id"),
+    _uuid("execution_id"),
+    Column("idempotency_key", Text, nullable=False),
+    _uuid("agent_id"),
+    Column("tool", Text, nullable=False),
+    Column("arguments", JSONB, nullable=False),
+    Column("arguments_sha256", Text, nullable=False),
+    Column("rationale", Text, nullable=False),
+    Column("evidence", JSONB, nullable=False),
+    Column("affected_resources", JSONB, nullable=False),
+    Column("risk", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    _ts("expires_at"),
+    _ts("requested_at"),
+    Column("decided_by", Text, nullable=True),
+    _ts("decided_at", nullable=True),
+    Column("decision_reason", Text, nullable=False),
+    Column("row_version", Integer, nullable=False),
+)
+
+audit_records = Table(
+    "audit_records",
+    metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("actor", Text, nullable=False),
+    Column("actor_type", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("decision", Text, nullable=False),
+    _ts("occurred_at"),
+    _uuid("agent_id", nullable=True),
+    _uuid("mission_id", nullable=True),
+    Column("tool", Text, nullable=True),
+    Column("target", Text, nullable=True),
+    _uuid("approval_id", nullable=True),
+    Column("reason", Text, nullable=False),
+    Column("arguments_sha256", Text, nullable=True),
+    Column("details", JSONB, nullable=False),
+)
+
+critical_enablements = Table(
+    "critical_enablements",
+    metadata,
+    Column("tool", Text, primary_key=True),
+    Column("enabled", Boolean, nullable=False),
+    Column("changed_by", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    _ts("changed_at"),
 )

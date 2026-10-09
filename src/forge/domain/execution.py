@@ -17,6 +17,7 @@ from forge.domain.cost import Usage
 
 class ExecutionStatus(StrEnum):
     RUNNING = "RUNNING"
+    WAITING_APPROVAL = "WAITING_APPROVAL"  # suspended; no worker holds it (ADR 0010)
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -24,7 +25,8 @@ class ExecutionStatus(StrEnum):
 
 _S = ExecutionStatus
 EXECUTION_TRANSITIONS: dict[ExecutionStatus, frozenset[ExecutionStatus]] = {
-    _S.RUNNING: frozenset({_S.COMPLETED, _S.FAILED, _S.CANCELLED}),
+    _S.RUNNING: frozenset({_S.WAITING_APPROVAL, _S.COMPLETED, _S.FAILED, _S.CANCELLED}),
+    _S.WAITING_APPROVAL: frozenset({_S.RUNNING, _S.FAILED, _S.CANCELLED}),
 }
 
 
@@ -76,6 +78,13 @@ class Execution:
 
     def cancel(self, now: datetime) -> "Execution":
         return self._finish(_S.CANCELLED, now)
+
+    def suspend(self) -> "Execution":
+        """Wait for a human: release the worker until the approval is decided (ADR 0010)."""
+        require_transition(
+            EXECUTION_TRANSITIONS, "execution", self.id, self.status, _S.WAITING_APPROVAL
+        )
+        return replace(self, status=_S.WAITING_APPROVAL)
 
     def _finish(
         self,

@@ -562,6 +562,11 @@ Audit
 
 Secrets are resolved outside model context.
 
+The Policy stage is governance by risk level: MEDIUM → policy rules, HIGH → durable
+human approval of the exact call, CRITICAL → disabled unless an operator enables
+it. Audit records are written in the same transaction as each decision
+(`docs/decisions/0010`).
+
 ---
 
 # 19. OBSERVABILITY ARCHITECTURE

@@ -48,17 +48,19 @@ def _setup(risk: RiskLevel = RiskLevel.LOW, max_risk: RiskLevel = RiskLevel.HIGH
     [
         (RiskLevel.LOW, RiskLevel.LOW, None),
         (RiskLevel.MEDIUM, RiskLevel.LOW, Stage.RISK),
-        (RiskLevel.MEDIUM, RiskLevel.MEDIUM, Stage.POLICY),  # no policy engine yet: deny
-        (RiskLevel.HIGH, RiskLevel.HIGH, Stage.POLICY),  # no approvals yet: deny
-        (RiskLevel.CRITICAL, RiskLevel.CRITICAL, Stage.POLICY),
+        (RiskLevel.MEDIUM, RiskLevel.MEDIUM, Stage.POLICY),  # no allowing rule: deny
+        (RiskLevel.HIGH, RiskLevel.HIGH, Stage.APPROVAL),  # no approval: wait for a human
+        (RiskLevel.CRITICAL, RiskLevel.CRITICAL, Stage.POLICY),  # not enabled: deny
     ],
 )
-def test_risk_and_policy_stages_fail_closed(
+def test_risk_and_governance_stages_fail_closed_without_governance_state(
     risk: RiskLevel, max_risk: RiskLevel, stage: Stage | None
 ) -> None:
     tools, version, task, mission = _setup(risk, max_risk)
 
-    decision = authorize("metrics.read", tools=tools, version=version, task=task, mission=mission)
+    decision = authorize(
+        "metrics.read", tools=tools, version=version, task=task, mission=mission, arguments={}
+    )
 
     assert decision.allowed is (stage is None)
     assert decision.stage == stage

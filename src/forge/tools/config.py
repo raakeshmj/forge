@@ -5,12 +5,16 @@
       {"remote_name": "...", "name": "...", "risk": "LOW", "idempotency": "READ_ONLY",
        "timeout_seconds": 10, "max_attempts": 1, "deferred": false, "description": "..."}]}],
   "http_tools": [{"name": "...", "description": "...", "url": "https://...",
-      "query_parameters": ["..."], "allowed_hosts": ["..."], "credential": "status_api"}]
+      "query_parameters": ["..."], "allowed_hosts": ["..."], "credential": "status_api"}],
+  "credential_grants": {"status_api": ["investigator"]}
 }
+
+A credential resolves only for the agents granted it (ADR 0010).
 """
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +30,7 @@ from forge.tools.mcp import McpServerConfig, McpToolConfig
 class ToolConfig:
     mcp_servers: tuple[McpServerConfig, ...] = ()
     http_tools: tuple[HttpToolConfig, ...] = ()
+    credential_grants: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 def load(path: Path) -> ToolConfig:
@@ -41,6 +46,10 @@ def parse(raw: dict[str, Any]) -> ToolConfig:
         return ToolConfig(
             mcp_servers=tuple(_server(s) for s in raw.get("mcp_servers", [])),
             http_tools=tuple(_http(t) for t in raw.get("http_tools", [])),
+            credential_grants={
+                str(reference): frozenset(str(agent) for agent in agents)
+                for reference, agents in raw.get("credential_grants", {}).items()
+            },
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise DomainError(f"invalid tool configuration: {exc}") from exc

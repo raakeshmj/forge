@@ -71,3 +71,34 @@ def test_invalid_worker_numbers_are_rejected(name: str, value: str) -> None:
 def test_connection_urls_never_appear_in_repr() -> None:
     assert "hunter2" not in repr(ApiSettings.from_env(API_REQUIRED))
     assert "hunter2" not in repr(WorkerSettings.from_env(DATABASE))
+
+
+def test_operator_tokens_map_tokens_to_names_and_never_appear_in_repr() -> None:
+    alice, bob = "a" * 32, "b" * 40
+    settings = ApiSettings.from_env(
+        {**API_REQUIRED, "FORGE_OPERATOR_TOKENS": f"alice:{alice}, bob:{bob}"}
+    )
+
+    assert settings.operator_tokens == {alice: "alice", bob: "bob"}
+    assert alice not in repr(settings)
+    assert ApiSettings.from_env(API_REQUIRED).operator_tokens == {}  # none: nobody is an operator
+
+
+@pytest.mark.parametrize(
+    "entry", ["alice:short", ":" + "a" * 32, "alice" + "a" * 32, "alice:{t},bob:{t}"]
+)
+def test_malformed_operator_tokens_are_rejected_without_echoing_them(entry: str) -> None:
+    raw = entry.format(t="c" * 32)
+    with pytest.raises(ConfigError) as excinfo:
+        ApiSettings.from_env({**API_REQUIRED, "FORGE_OPERATOR_TOKENS": raw})
+
+    assert "FORGE_OPERATOR_TOKENS" in str(excinfo.value)
+    assert "c" * 32 not in str(excinfo.value)
+    assert "short" not in str(excinfo.value)
+
+
+def test_approval_ttl_is_configurable_and_positive() -> None:
+    env = {**DATABASE, "FORGE_APPROVAL_TTL_SECONDS": "600"}
+    assert WorkerSettings.from_env(env).approval_ttl_seconds == 600.0
+    with pytest.raises(ConfigError):
+        WorkerSettings.from_env({**DATABASE, "FORGE_APPROVAL_TTL_SECONDS": "0"})

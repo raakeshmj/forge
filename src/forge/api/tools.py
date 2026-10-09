@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from forge.api.dependencies import clock, uow_factory
+from forge.api.dependencies import clock, operator, uow_factory
 from forge.domain.tool import RegisteredTool
 from forge.tools import registry
 
@@ -43,6 +43,11 @@ async def list_tools(request: Request) -> list[ToolView]:
 
 
 @router.post("/{name}/pin")
-async def pin_tool(name: str, body: PinRequest, request: Request) -> ToolView:
+async def pin_tool(
+    name: str, body: PinRequest, request: Request, by: str = Depends(operator)
+) -> ToolView:
     """Operator approval: make this exact registered version the executable one."""
-    return ToolView.of(await registry.pin(uow_factory(request), clock(request), name, body.version))
+    pinned = await registry.pin(
+        uow_factory(request), clock(request), name, body.version, operator=by
+    )
+    return ToolView.of(pinned)

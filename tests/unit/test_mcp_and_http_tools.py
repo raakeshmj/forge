@@ -25,7 +25,13 @@ from forge.tools.mcp import (
 from tests import factories
 
 pytestmark = pytest.mark.anyio
-CONTEXT = ToolContext("k", factories.mission().id, factories.mission().id, factories.mission().id)
+CONTEXT = ToolContext(
+    "k",
+    factories.mission().id,
+    factories.mission().id,
+    factories.mission().id,
+    agent_name="investigator",
+)
 
 
 def server() -> MCPServer:
@@ -133,7 +139,9 @@ def http_tool(handler, address: str = "93.184.216.34") -> HttpApiTool:  # type: 
     )
     return HttpApiTool(
         config,
-        EnvSecretResolver({"FORGE_SECRET_STATUS_API": SECRET}),
+        EnvSecretResolver(
+            {"FORGE_SECRET_STATUS_API": SECRET}, grants={"status_api": frozenset({"investigator"})}
+        ),
         resolver=resolve,
         transport=httpx2.MockTransport(handler),
     )
@@ -189,3 +197,19 @@ async def test_server_errors_are_retryable_and_internal_targets_never_contacted(
     assert blocked.is_error
     assert "egress" in blocked.content
     assert calls == []
+
+
+async def test_an_agent_without_a_grant_never_sends_the_credential() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, text="{}")
+
+    other = ToolContext("k", CONTEXT.execution_id, CONTEXT.mission_id, CONTEXT.agent_id, "intruder")
+    with pytest.raises(ToolExecutionError) as excinfo:
+        await http_tool(handler).invoke({"service": "checkout"}, other)
+
+    assert seen == []  # refused before any request left the process
+    assert not excinfo.value.retryable
+    assert SECRET not in str(excinfo.value)

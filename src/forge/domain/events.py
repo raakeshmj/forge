@@ -435,3 +435,26 @@ class SkillRolledBack(DomainEvent):
     agent_id: UUID
     restored_agent_version: int
     reason: str
+
+
+# --- Governance --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRequested(DomainEvent):
+    aggregate_type = "approval"
+    event_type = "approval.requested"
+    execution_id: UUID
+    tool: str
+    risk: str
+    arguments_sha256: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalCompleted(DomainEvent):
+    aggregate_type = "approval"
+    event_type = "approval.completed"
+    decision: str  # APPROVED | DENIED | EXPIRED
+    decided_by: str
+    reason: str

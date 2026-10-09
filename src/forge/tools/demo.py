@@ -1,4 +1,8 @@
-"""A simulated read-only metrics tool for the Phase 1 demo (the PRD's checkout scenario)."""
+"""Simulated tools for the demos (the PRD's checkout scenario).
+
+`metrics.read` is read-only (Phase 1). `deployment.rollback` is a simulated HIGH-risk,
+non-idempotent remediation: every call needs a human approval (Phase 8, ADR 0010).
+"""
 
 import asyncio
 from collections.abc import Mapping
@@ -60,3 +64,36 @@ class MetricsReadTool:
         if series is None:
             return ToolResult(f"no data for {service}/{metric}", is_error=True)
         return ToolResult(f"{service} {metric}: {series}")
+
+
+class DeploymentRollbackTool:
+    """Simulated: changes nothing outside FORGE, but is governed as a real rollback would be."""
+
+    def __init__(self) -> None:
+        self._definition = ToolDefinition(
+            name="deployment.rollback",
+            version="1",
+            description="Roll a service back to its previous release.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string", "maxLength": 100},
+                    "reason": {"type": "string", "maxLength": 500},
+                },
+                "required": ["service", "reason"],
+                "additionalProperties": False,
+            },
+            risk=RiskLevel.HIGH,
+            idempotency=Idempotency.NON_IDEMPOTENT,
+            timeout_seconds=10.0,
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    async def invoke(self, arguments: Mapping[str, JSONValue], context: ToolContext) -> ToolResult:
+        service = arguments.get("service")
+        if service not in {s for s, _ in _SERIES}:
+            return ToolResult(f"unknown service {service!r}", is_error=True)
+        return ToolResult(f"Rolled back {service} to the release before the 14:05 deploy.")

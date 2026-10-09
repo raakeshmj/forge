@@ -48,7 +48,11 @@ services:
 
   api:
     image: forge:dev
-    environment: *forge-env
+    environment:
+      <<: *forge-env
+      # name:token pairs of the humans who approve, write policy, and promote (ADR 0010).
+      # Empty by default: no one can, until an operator is configured.
+      FORGE_OPERATOR_TOKENS: ${FORGE_OPERATOR_TOKENS:-}
     ports:
       - "127.0.0.1:${FORGE_API_HOST_PORT:-18000}:8000"
     depends_on:
@@ -72,6 +76,7 @@ services:
       FORGE_WORKER_CONCURRENCY: ${FORGE_WORKER_CONCURRENCY:-4}
       # Simulated tool latency, used by the end-to-end interruption demo to kill mid-step.
       FORGE_DEMO_TOOL_DELAY_SECONDS: ${FORGE_DEMO_TOOL_DELAY_SECONDS:-0}
+      FORGE_APPROVAL_TTL_SECONDS: ${FORGE_APPROVAL_TTL_SECONDS:-86400}
     depends_on:
       migrate:
         condition: service_completed_successfully

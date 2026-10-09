@@ -31,7 +31,7 @@ from forge.tools import config as tool_config
 from forge.tools import mcp as mcp_adapter
 from forge.tools import registry
 from forge.tools.base import Tool
-from forge.tools.demo import MetricsReadTool
+from forge.tools.demo import DeploymentRollbackTool, MetricsReadTool
 from forge.tools.http_api import HttpApiTool
 from forge.tools.mcp import McpConnection
 from forge.tools.registry import Discovered
@@ -55,6 +55,7 @@ async def discover_tools(settings: WorkerSettings, stack: AsyncExitStack) -> lis
     """Native tools, plus MCP servers and remote API tools from the operator's configuration."""
     native: list[Tool] = [
         MetricsReadTool(simulated_latency_seconds=settings.demo_tool_delay_seconds),
+        DeploymentRollbackTool(),  # HIGH risk: runs only after an operator approves each call
         ToolSearchTool(),
     ]
     discovered = [Discovered(tool, source_ref=f"native:{tool.definition.name}") for tool in native]
@@ -64,7 +65,7 @@ async def discover_tools(settings: WorkerSettings, stack: AsyncExitStack) -> lis
     for server in config.mcp_servers:
         connection = await McpConnection.open(server, stack)
         discovered.extend(await mcp_adapter.discover(connection, server))
-    secrets = EnvSecretResolver()
+    secrets = EnvSecretResolver(grants=config.credential_grants)
     for http_tool in config.http_tools:
         discovered.append(
             Discovered(HttpApiTool(http_tool, secrets), source_ref=f"remote:{http_tool.url}")
@@ -86,6 +87,7 @@ async def serve(settings: WorkerSettings) -> None:
         tools=registered.active,
         worker_id=settings.worker_id,
         lease_seconds=settings.lease_seconds,
+        approval_ttl_seconds=settings.approval_ttl_seconds,
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

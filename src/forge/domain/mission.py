@@ -35,7 +35,7 @@ MISSION_TRANSITIONS: dict[MissionStatus, frozenset[MissionStatus]] = {
     _S.READY: frozenset({_S.RUNNING, _S.FAILED, _S.CANCELLED}),  # FAILED: tasks cancelled first
     _S.RUNNING: frozenset({_S.PAUSED, _S.WAITING_APPROVAL, _S.FAILED, _S.COMPLETED, _S.CANCELLED}),
     _S.PAUSED: frozenset({_S.RUNNING, _S.CANCELLED}),
-    _S.WAITING_APPROVAL: frozenset({_S.RUNNING, _S.CANCELLED}),
+    _S.WAITING_APPROVAL: frozenset({_S.RUNNING, _S.FAILED, _S.CANCELLED}),
 }
 
 

@@ -160,13 +160,14 @@ async def submit(
     budget: int = 1_000_000,
     policy: ExecutionPolicy = FAST_POLICY,
     max_risk: RiskLevel = RiskLevel.LOW,
+    agent_name: str | None = None,
     **request: Any,
 ) -> UUID:
     clock = SystemClock()
     version = await register_agent(
         uow,
         clock,
-        name=f"agent-{uuid4().hex[:12]}",
+        name=agent_name or f"agent-{uuid4().hex[:12]}",
         role="investigator",
         instructions="Investigate.",
         model=TEST_MODEL,

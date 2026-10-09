@@ -29,6 +29,7 @@ def main() -> None:
         readiness_checks=(postgres.PostgresCheck(engine), redis.RedisCheck(redis_client)),
         readiness_timeout_seconds=settings.readiness_timeout_seconds,
         on_shutdown=shutdown,
+        operator_tokens=settings.operator_tokens,
     )
 
     uvicorn.run(

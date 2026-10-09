@@ -28,6 +28,7 @@ class ToolContext:
     execution_id: UUID
     mission_id: UUID
     agent_id: UUID
+    agent_name: str = ""  # the identity credential grants are checked against (ADR 0010)
     # Deferred tools this agent may load; only `tools.search` reads it.
     discoverable: tuple[ToolDefinition, ...] = ()
 

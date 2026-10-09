@@ -36,6 +36,17 @@ from forge.domain.evaluation import (
 )
 from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution, ExecutionStatus, FailureKind
+from forge.domain.governance import (
+    ActorType,
+    Approval,
+    ApprovalStatus,
+    AuditRecord,
+    Condition,
+    Effect,
+    Operator,
+    Policy,
+    Rule,
+)
 from forge.domain.mission import Budget, ExecutionPolicy, Mission, MissionStatus, RiskPolicy
 from forge.domain.repositories import (
     AlreadyExistsError,
@@ -86,6 +97,10 @@ class PostgresUnitOfWork:
         self.competencies = _Competencies(connection)
         self.skills = _Skills(connection)
         self.learning = _Learning(connection)
+        self.policies = _Policies(connection)
+        self.approvals = _Approvals(connection)
+        self.audit = _Audit(connection)
+        self.critical = _Critical(connection)
         return self
 
     async def __aexit__(
@@ -533,6 +548,51 @@ class _Executions(_Repository):
             )
         ).first()
         return None if row is None else _execution(row)
+
+    async def reclaim_decided(
+        self, *, worker_id: str, lease_seconds: float
+    ) -> tuple[Execution, int] | None:
+        decided = (
+            select(t.executions.c.id)
+            .where(
+                t.executions.c.status == ExecutionStatus.WAITING_APPROVAL.value,
+                select(t.approvals.c.id)
+                .where(
+                    t.approvals.c.execution_id == t.executions.c.id,
+                    t.approvals.c.status != "PENDING",  # expiry is closed by expire_due first
+                )
+                .exists()
+                | select(t.missions.c.id)
+                .where(
+                    t.missions.c.id == t.executions.c.mission_id,
+                    t.missions.c.status.in_(["COMPLETED", "FAILED", "CANCELLED"])
+                    | (t.missions.c.deadline <= func.now()),
+                )
+                .exists()
+                | select(t.tasks.c.id)
+                .where(t.tasks.c.id == t.executions.c.task_id, t.tasks.c.status == "CANCELLED")
+                .exists(),
+            )
+            .order_by(t.executions.c.started_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .scalar_subquery()
+        )
+        row = (
+            await self._connection.execute(
+                update(t.executions)
+                .where(t.executions.c.id == decided)
+                .values(
+                    status=ExecutionStatus.RUNNING.value,
+                    # a resume after a decision is not a crash recovery: attempt unchanged
+                    fence=t.executions.c.fence + 1,
+                    lease_owner=worker_id,
+                    lease_expires_at=_lease_until(lease_seconds),
+                )
+                .returning(t.executions)
+            )
+        ).first()
+        return None if row is None else (_execution(row), row.fence)
 
     async def reliability(self, agent_ids: list[UUID]) -> dict[UUID, Reliability]:
         if not agent_ids:
@@ -1419,3 +1479,252 @@ def _cycle(row: Row[Any]) -> LearningCycle:
         updated_at=row.updated_at,
         row_version=row.row_version,
     )
+
+
+# --- Governance --------------------------------------------------------------------------
+
+
+class _Policies(_Repository):
+    async def add(self, policy: Policy) -> None:
+        await self._connection.execute(
+            insert(t.policies).values(
+                name=policy.name,
+                version=policy.version,
+                rules=[_rule_json(rule) for rule in policy.rules],
+                created_by=policy.created_by,
+                created_at=policy.created_at,
+            )
+        )
+
+    async def next_version(self, name: str) -> int:
+        current = await self._connection.scalar(
+            select(func.max(t.policies.c.version)).where(t.policies.c.name == name)
+        )
+        return int(current or 0) + 1
+
+    async def active(self) -> list[Policy]:
+        latest = (
+            select(t.policies.c.name, func.max(t.policies.c.version).label("version"))
+            .group_by(t.policies.c.name)
+            .subquery()
+        )
+        rows = await self._connection.execute(
+            select(t.policies)
+            .join(
+                latest,
+                and_(t.policies.c.name == latest.c.name, t.policies.c.version == latest.c.version),
+            )
+            .order_by(t.policies.c.name)
+        )
+        return [
+            Policy(
+                name=row.name,
+                version=row.version,
+                rules=tuple(_rule(rule) for rule in row.rules),
+                created_by=row.created_by,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
+
+def _rule_json(rule: Rule) -> dict[str, Any]:
+    return {
+        "effect": rule.effect.value,
+        "tools": list(rule.tools),
+        "agents": list(rule.agents),
+        "reason": rule.reason,
+        "conditions": [
+            {"argument": c.argument, "operator": c.operator.value, "value": c.value}
+            for c in rule.conditions
+        ],
+    }
+
+
+def _rule(data: dict[str, Any]) -> Rule:
+    return Rule(
+        effect=Effect(data["effect"]),
+        tools=tuple(data["tools"]),
+        agents=tuple(data.get("agents", [])),
+        reason=data.get("reason", ""),
+        conditions=tuple(
+            Condition(c["argument"], Operator(c["operator"]), c["value"])
+            for c in data.get("conditions", [])
+        ),
+    )
+
+
+class _Approvals(_Repository):
+    async def add(self, approval: Approval) -> None:
+        await self._connection.execute(insert(t.approvals).values(**_approval_values(approval)))
+
+    async def get(self, approval_id: UUID, *, for_update: bool = False) -> Approval:
+        statement = select(t.approvals).where(t.approvals.c.id == approval_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return _approval(await self._one(statement, "approval", approval_id))
+
+    async def latest_for_key(self, idempotency_key: str) -> Approval | None:
+        row = (
+            await self._connection.execute(
+                select(t.approvals)
+                .where(t.approvals.c.idempotency_key == idempotency_key)
+                .order_by(t.approvals.c.requested_at.desc())
+                .limit(1)
+            )
+        ).first()
+        return None if row is None else _approval(row)
+
+    async def update(self, approval: Approval) -> Approval:
+        values = _approval_values(approval)
+        values["row_version"] = approval.row_version + 1
+        result = await self._connection.execute(
+            update(t.approvals)
+            .where(
+                t.approvals.c.id == approval.id, t.approvals.c.row_version == approval.row_version
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            raise ConcurrentUpdateError("approval", approval.id)
+        return replace(approval, row_version=approval.row_version + 1)
+
+    async def list_approvals(self, status: ApprovalStatus | None = None) -> list[Approval]:
+        statement = select(t.approvals).order_by(t.approvals.c.requested_at.desc())
+        if status is not None:
+            statement = statement.where(t.approvals.c.status == status.value)
+        return [_approval(row) for row in await self._connection.execute(statement)]
+
+    async def pending_for_execution(self, execution_id: UUID) -> list[Approval]:
+        rows = await self._connection.execute(
+            select(t.approvals)
+            .where(
+                t.approvals.c.execution_id == execution_id,
+                t.approvals.c.status == ApprovalStatus.PENDING.value,
+            )
+            .with_for_update()
+        )
+        return [_approval(row) for row in rows]
+
+    async def due_for_expiry(self, now: datetime) -> list[Approval]:
+        rows = await self._connection.execute(
+            select(t.approvals)
+            .where(
+                t.approvals.c.status == ApprovalStatus.PENDING.value,
+                t.approvals.c.expires_at <= now,
+            )
+            .with_for_update(skip_locked=True)  # an operator deciding it right now wins
+        )
+        return [_approval(row) for row in rows]
+
+
+def _approval_values(a: Approval) -> dict[str, Any]:
+    return {
+        "id": a.id,
+        "mission_id": a.mission_id,
+        "task_id": a.task_id,
+        "execution_id": a.execution_id,
+        "idempotency_key": a.idempotency_key,
+        "agent_id": a.agent_id,
+        "tool": a.tool,
+        "arguments": dict(a.arguments),
+        "arguments_sha256": a.arguments_sha256,
+        "rationale": a.rationale,
+        "evidence": list(a.evidence),
+        "affected_resources": list(a.affected_resources),
+        "risk": a.risk,
+        "status": a.status.value,
+        "expires_at": a.expires_at,
+        "requested_at": a.requested_at,
+        "decided_by": a.decided_by,
+        "decided_at": a.decided_at,
+        "decision_reason": a.decision_reason,
+        "row_version": a.row_version,
+    }
+
+
+def _approval(row: Row[Any]) -> Approval:
+    return Approval(
+        id=row.id,
+        mission_id=row.mission_id,
+        task_id=row.task_id,
+        execution_id=row.execution_id,
+        idempotency_key=row.idempotency_key,
+        agent_id=row.agent_id,
+        tool=row.tool,
+        arguments=row.arguments,
+        arguments_sha256=row.arguments_sha256,
+        rationale=row.rationale,
+        evidence=tuple(row.evidence),
+        affected_resources=tuple(row.affected_resources),
+        risk=row.risk,
+        status=ApprovalStatus(row.status),
+        expires_at=row.expires_at,
+        requested_at=row.requested_at,
+        decided_by=row.decided_by,
+        decided_at=row.decided_at,
+        decision_reason=row.decision_reason,
+        row_version=row.row_version,
+    )
+
+
+class _Audit(_Repository):
+    async def add(self, record: AuditRecord) -> None:
+        await self._connection.execute(
+            insert(t.audit_records).values(
+                actor=record.actor,
+                actor_type=record.actor_type.value,
+                action=record.action,
+                decision=record.decision,
+                occurred_at=record.occurred_at,
+                agent_id=record.agent_id,
+                mission_id=record.mission_id,
+                tool=record.tool,
+                target=record.target,
+                approval_id=record.approval_id,
+                reason=record.reason,
+                arguments_sha256=record.arguments_sha256,
+                details=dict(record.details),
+            )
+        )
+
+    async def list_records(
+        self, *, mission_id: UUID | None = None, limit: int = 200
+    ) -> list[AuditRecord]:
+        statement = select(t.audit_records).order_by(t.audit_records.c.id.desc()).limit(limit)
+        if mission_id is not None:
+            statement = statement.where(t.audit_records.c.mission_id == mission_id)
+        return [
+            AuditRecord(
+                actor=row.actor,
+                actor_type=ActorType(row.actor_type),
+                action=row.action,
+                decision=row.decision,
+                occurred_at=row.occurred_at,
+                agent_id=row.agent_id,
+                mission_id=row.mission_id,
+                tool=row.tool,
+                target=row.target,
+                approval_id=row.approval_id,
+                reason=row.reason,
+                arguments_sha256=row.arguments_sha256,
+                details=row.details,
+            )
+            for row in await self._connection.execute(statement)
+        ]
+
+
+class _Critical(_Repository):
+    async def enabled(self) -> frozenset[str]:
+        rows = await self._connection.execute(
+            select(t.critical_enablements.c.tool).where(t.critical_enablements.c.enabled.is_(True))
+        )
+        return frozenset(row[0] for row in rows)
+
+    async def set(self, tool: str, enabled: bool, by: str, reason: str, now: datetime) -> None:
+        values = {"enabled": enabled, "changed_by": by, "reason": reason, "changed_at": now}
+        await self._connection.execute(
+            pg_insert(t.critical_enablements)
+            .values(tool=tool, **values)
+            .on_conflict_do_update(index_elements=[t.critical_enablements.c.tool], set_=values)
+        )

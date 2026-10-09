@@ -200,6 +200,27 @@ async def start_task(uow: UnitOfWork, task: Task, execution_id: UUID, now: datet
     return task
 
 
+async def block_task(uow: UnitOfWork, task_id: UUID, now: datetime) -> None:
+    """A task's execution is waiting for a human: the task blocks, the mission waits."""
+    task = await uow.tasks.get(task_id, for_update=True)
+    mission = await uow.missions.get(task.mission_id, for_update=True)
+    await uow.tasks.update(task.transition(TaskStatus.BLOCKED, now))
+    if mission.status is MissionStatus.RUNNING:
+        await uow.missions.update(mission.transition(MissionStatus.WAITING_APPROVAL, now))
+
+
+async def unblock_task(uow: UnitOfWork, task_id: UUID, now: datetime) -> None:
+    """The human decided: the task runs again; the mission resumes if nothing else waits."""
+    task = await uow.tasks.get(task_id, for_update=True)
+    mission = await uow.missions.get(task.mission_id, for_update=True)
+    if task.status is TaskStatus.BLOCKED:
+        await uow.tasks.update(task.transition(TaskStatus.RUNNING, now))
+    others = await uow.tasks.list_for_mission(mission.id)
+    still_blocked = any(t.status is TaskStatus.BLOCKED and t.id != task.id for t in others)
+    if mission.status is MissionStatus.WAITING_APPROVAL and not still_blocked:
+        await uow.missions.update(mission.transition(MissionStatus.RUNNING, now))
+
+
 async def task_brief(uow: UnitOfWork, task: Task) -> str:
     """The task's first message: its objective, then upstream results marked as untrusted data."""
     if not task.dependencies:

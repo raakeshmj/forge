@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
-from forge.api.dependencies import clock, uow_factory
+from forge.api.dependencies import clock, operator, uow_factory
 from forge.domain.skill import LearningCycle, SkillVersion
 from forge.learning import cycle
 from forge.learning.generation import DeterministicSkillGenerator
@@ -115,14 +115,20 @@ async def get_cycle(cycle_id: UUID, request: Request) -> CycleView:
 
 
 @router.post("/learning/cycles/{cycle_id}/promote")
-async def promote(cycle_id: UUID, request: Request) -> CycleView:
-    return CycleView.of(await cycle.promote(uow_factory(request), clock(request), cycle_id))
+async def promote(cycle_id: UUID, request: Request, by: str = Depends(operator)) -> CycleView:
+    return CycleView.of(
+        await cycle.promote(uow_factory(request), clock(request), cycle_id, operator=by)
+    )
 
 
 @router.post("/learning/cycles/{cycle_id}/rollback")
-async def rollback(cycle_id: UUID, body: RollbackRequest, request: Request) -> CycleView:
+async def rollback(
+    cycle_id: UUID, body: RollbackRequest, request: Request, by: str = Depends(operator)
+) -> CycleView:
     return CycleView.of(
-        await cycle.rollback(uow_factory(request), clock(request), cycle_id, reason=body.reason)
+        await cycle.rollback(
+            uow_factory(request), clock(request), cycle_id, reason=body.reason, actor=by
+        )
     )
 
 
