@@ -23,6 +23,7 @@ from forge.domain.evaluation import (
 from forge.domain.events import DomainEvent, EventRecord
 from forge.domain.execution import Execution
 from forge.domain.governance import Approval, ApprovalStatus, AuditRecord, Policy
+from forge.domain.insights import AgentUsage, MissionSummary, Overview
 from forge.domain.mission import Mission
 from forge.domain.skill import CycleStatus, LearningCycle, SkillVersion
 from forge.domain.task import Task
@@ -217,6 +218,8 @@ class EvaluationRepository(Protocol):
         """Persist; returns False if an automatic evaluation of the mission already exists."""
         ...
 
+    async def recent(self, limit: int) -> list[Evaluation]: ...
+
     async def list_for_mission(self, mission_id: UUID) -> list[Evaluation]: ...
     async def missions_awaiting_evaluation(self, limit: int) -> list[UUID]:
         """Terminal missions with no automatic evaluation yet, oldest first."""
@@ -231,6 +234,8 @@ class BenchmarkRepository(Protocol):
     async def add(self, benchmark: Benchmark, now: datetime) -> None:
         """Insert if this (name, version) is new; existing versions are immutable."""
         ...
+
+    async def list_runs(self, limit: int) -> list[BenchmarkRun]: ...
 
     async def get(self, name: str, version: int | None = None) -> Benchmark:
         """A specific version, or the latest when `version` is None."""
@@ -317,6 +322,14 @@ class EventRepository(Protocol):
     async def list_for_aggregate(self, aggregate_id: UUID) -> list[EventRecord]: ...
 
 
+class InsightsRepository(Protocol):
+    """Query-side aggregates for the control plane (ADR 0012); never read by commands."""
+
+    async def missions(self, *, limit: int, status: str | None = None) -> list[MissionSummary]: ...
+    async def overview(self, since: datetime | None) -> Overview: ...
+    async def agent_usage(self, agent_id: UUID) -> AgentUsage: ...
+
+
 class UnitOfWork(Protocol):
     @property
     def agents(self) -> AgentRepository: ...
@@ -356,6 +369,8 @@ class UnitOfWork(Protocol):
     def audit(self) -> AuditRepository: ...
     @property
     def critical(self) -> CriticalEnablementRepository: ...
+    @property
+    def insights(self) -> InsightsRepository: ...
 
     async def __aenter__(self) -> Self: ...
     async def __aexit__(

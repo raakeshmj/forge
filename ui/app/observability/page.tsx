@@ -1,0 +1,128 @@
+import { Bar, Empty, Header, Stat } from "@/components/ui";
+import { api } from "@/lib/api";
+import { ms, num, pct, usd } from "@/lib/format";
+import type { Overview } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+
+const WINDOWS: [string, string][] = [["", "all time"], ["24", "24 h"], ["168", "7 days"]];
+
+export default async function Observability({ searchParams }: { searchParams: Promise<{ hours?: string }> }) {
+  const { hours } = await searchParams;
+  const window = hours && /^\d+$/.test(hours) ? hours : "";
+  const o = await api<Overview>(`/insights${window ? `?hours=${window}` : ""}`);
+  const executions = o.executions_by_status.reduce((t, c) => t + c.count, 0);
+  const failed = o.executions_by_status.find((c) => c.key === "FAILED")?.count ?? 0;
+  const read = o.models.reduce((t, m) => t + m.cache_read_input_tokens, 0);
+  const prompt = o.models.reduce((t, m) => t + m.input_tokens + m.cache_read_input_tokens + m.cache_creation_input_tokens, 0);
+  const savings = o.models.reduce((t, m) => t + m.cache_savings_micro_usd, 0);
+  return (
+    <>
+      <Header title="Observability" sub={<>Latency, tokens, caching, tools, and failures. Window: {WINDOWS.map(([h, label], i) => (
+        <span key={label}>{i ? " · " : ""}<a href={h ? `?hours=${h}` : "?"}>{label}</a></span>
+      ))}</>} />
+      <div className="stats">
+        <Stat label="Executions" value={num(executions)} />
+        <Stat label="Execution failure rate" value={pct(executions ? failed / executions : 0)} />
+        <Stat label="Prompt tokens" value={num(prompt)} />
+        <Stat label="Cached tokens" value={num(read)} />
+        <Stat label="Cache hit rate" value={pct(prompt ? read / prompt : 0)} />
+        <Stat label="Cache savings" value={usd(savings)} />
+      </div>
+      <h2>Models</h2>
+      {o.models.length ? (
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th className="num">Calls</th>
+              <th className="num">p50</th>
+              <th className="num">p95</th>
+              <th className="num">p99</th>
+              <th className="num">In</th>
+              <th className="num">Out</th>
+              <th className="num">Cache read</th>
+              <th className="num">Cache write</th>
+              <th className="num">Hit rate</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {o.models.map((m) => (
+              <tr key={`${m.provider}/${m.model}`}>
+                <td className="mono">{m.provider}/{m.model}</td>
+                <td className="num">{num(m.calls)}</td>
+                <td className="num">{ms(m.latency_p50_ms)}</td>
+                <td className="num">{ms(m.latency_p95_ms)}</td>
+                <td className="num">{ms(m.latency_p99_ms)}</td>
+                <td className="num">{num(m.input_tokens)}</td>
+                <td className="num">{num(m.output_tokens)}</td>
+                <td className="num">{num(m.cache_read_input_tokens)}</td>
+                <td className="num">{num(m.cache_creation_input_tokens)}</td>
+                <td className="num">{pct(m.cache_hit_rate)}</td>
+                <td><Bar ratio={m.cache_hit_rate} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <Empty>No model calls in this window.</Empty>
+      )}
+      <h2>Tools</h2>
+      {o.tools.length ? (
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th className="num">Calls</th>
+              <th className="num">Error results</th>
+              <th className="num">Failures</th>
+              <th className="num">Denied</th>
+              <th className="num">Re-executed after crash</th>
+            </tr>
+          </thead>
+          <tbody>
+            {o.tools.map((t) => (
+              <tr key={t.tool}>
+                <td className="mono">{t.tool}</td>
+                <td className="num">{num(t.calls)}</td>
+                <td className="num">{num(t.errors)}</td>
+                <td className="num">{num(t.failures)}</td>
+                <td className="num">{num(t.denials)}</td>
+                <td className="num">{num(t.reinvocations)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <Empty>No tool calls in this window.</Empty>
+      )}
+      <div className="cols">
+        <div>
+          <h2>Execution outcomes</h2>
+          <table>
+            <tbody>
+              {o.executions_by_status.map((c) => (
+                <tr key={c.key}><td>{c.key.toLowerCase()}</td><td className="num">{num(c.count)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h2>Failures by kind</h2>
+          {o.failures_by_kind.length ? (
+            <table>
+              <tbody>
+                {o.failures_by_kind.map((c) => (
+                  <tr key={c.key}><td>{c.key}</td><td className="num">{num(c.count)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <Empty>No failures.</Empty>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}

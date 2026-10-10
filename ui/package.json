@@ -1,0 +1,33 @@
+{
+  "name": "forge-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FORGE control-plane UI (ADR 0012)",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "next dev --port 13000",
+    "build": "next build",
+    "start": "next start --port 13000",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@xyflow/react": "12.12.0",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "10.12.0",
+    "eslint-config-next": "16.4.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  }
+}

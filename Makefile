@@ -1,5 +1,5 @@
 # Canonical development commands. CI runs these same targets.
-.PHONY: install format lint typecheck boundaries test test-integration e2e e2e-temporal test-live check up up-temporal down migrate migration
+.PHONY: install format lint typecheck boundaries test test-integration e2e e2e-temporal test-live check up up-temporal down migrate migration ui-install ui-check
 
 # Defaults point at the services started by `make up` (see compose.yaml host ports).
 FORGE_DATABASE_URL ?= postgresql+psycopg://forge:forge@127.0.0.1:15432/forge
@@ -39,6 +39,12 @@ test-live:  ## Real provider calls (needs ANTHROPIC_API_KEY and/or OPENAI_API_KE
 	uv run pytest -m live
 
 check: lint typecheck boundaries test  ## Everything that runs without external services
+
+ui-install:  ## Install the control-plane UI's locked dependencies
+	cd ui && npm ci --no-audit --no-fund
+
+ui-check:  ## UI lint, types, unit tests, and production build
+	cd ui && npm run lint && npm run typecheck && npm test && npm run build
 
 up:  ## Build and start the full stack, waiting until healthy
 	docker compose up -d --build --wait

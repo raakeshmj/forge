@@ -10,7 +10,7 @@ from types import TracebackType
 from typing import Any, Self
 from uuid import UUID, uuid4
 
-from sqlalchemy import Row, and_, delete, func, insert, select, text, update
+from sqlalchemy import Row, and_, delete, func, insert, select, text, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
@@ -46,6 +46,16 @@ from forge.domain.governance import (
     Operator,
     Policy,
     Rule,
+)
+from forge.domain.insights import (
+    AgentUsage,
+    CostShare,
+    Count,
+    DimensionMean,
+    MissionSummary,
+    ModelUsage,
+    Overview,
+    ToolUsage,
 )
 from forge.domain.mission import Budget, ExecutionPolicy, Mission, MissionStatus, RiskPolicy
 from forge.domain.repositories import (
@@ -107,6 +117,7 @@ class PostgresUnitOfWork:
         self.approvals = _Approvals(connection)
         self.audit = _Audit(connection)
         self.critical = _Critical(connection)
+        self.insights = _Insights(connection)
         return self
 
     async def __aexit__(
@@ -1055,6 +1066,12 @@ class _Evaluations(_Repository):
         )
         return [await self._hydrate(row) for row in rows.fetchall()]
 
+    async def recent(self, limit: int) -> list[Evaluation]:
+        rows = await self._connection.execute(
+            select(t.evaluations).order_by(t.evaluations.c.created_at.desc()).limit(limit)
+        )
+        return [await self._hydrate(row) for row in rows.fetchall()]
+
     async def missions_awaiting_evaluation(self, limit: int) -> list[UUID]:
         evaluated = (
             select(t.evaluations.c.mission_id)
@@ -1186,21 +1203,18 @@ class _Benchmarks(_Repository):
             ],
         )
 
+    async def list_runs(self, limit: int) -> list[BenchmarkRun]:
+        rows = await self._connection.execute(
+            select(t.benchmark_runs).order_by(t.benchmark_runs.c.created_at.desc()).limit(limit)
+        )
+        return [_benchmark_run(row) for row in rows]
+
     async def get_run(self, run_id: UUID, *, for_update: bool = False) -> BenchmarkRun:
         statement = select(t.benchmark_runs).where(t.benchmark_runs.c.id == run_id)
         if for_update:
             statement = statement.with_for_update()
         row = await self._one(statement, "benchmark run", run_id)
-        return BenchmarkRun(
-            id=row.id,
-            benchmark=row.benchmark,
-            version=row.version,
-            agent_id=row.agent_id,
-            status=BenchmarkRunStatus(row.status),
-            summary=row.summary,
-            created_at=row.created_at,
-            completed_at=row.completed_at,
-        )
+        return _benchmark_run(row)
 
     async def run_items(self, run_id: UUID) -> list[BenchmarkRunItem]:
         rows = await self._connection.execute(
@@ -1296,6 +1310,19 @@ _RELIABILITY = text(
 
 
 # --- Capabilities ------------------------------------------------------------------------
+
+
+def _benchmark_run(row: Row[Any]) -> BenchmarkRun:
+    return BenchmarkRun(
+        id=row.id,
+        benchmark=row.benchmark,
+        version=row.version,
+        agent_id=row.agent_id,
+        status=BenchmarkRunStatus(row.status),
+        summary=row.summary,
+        created_at=row.created_at,
+        completed_at=row.completed_at,
+    )
 
 
 class _Capabilities(_Repository):
@@ -1782,3 +1809,222 @@ class _Critical(_Repository):
             .values(tool=tool, **values)
             .on_conflict_do_update(index_elements=[t.critical_enablements.c.tool], set_=values)
         )
+
+
+# --- Read models (ADR 0012) ----------------------------------------------------------------
+
+_MODEL_USAGE = """
+SELECT e.payload->>'provider' AS provider, e.payload->>'model' AS model, count(*) AS calls,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY (e.payload->>'latency_ms')::float) AS p50,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY (e.payload->>'latency_ms')::float) AS p95,
+       percentile_cont(0.99) WITHIN GROUP (ORDER BY (e.payload->>'latency_ms')::float) AS p99,
+       sum((e.payload->'usage'->>'input_tokens')::bigint) AS input_tokens,
+       sum((e.payload->'usage'->>'output_tokens')::bigint) AS output_tokens,
+       sum((e.payload->'usage'->>'cache_read_input_tokens')::bigint) AS cache_read,
+       sum((e.payload->'usage'->>'cache_creation_input_tokens')::bigint) AS cache_write,
+       sum((e.payload->>'cost_micro_usd')::bigint) AS cost,
+       sum((e.payload->>'cache_savings_micro_usd')::bigint) AS savings
+FROM events e
+LEFT JOIN executions x ON x.id = e.aggregate_id
+WHERE e.event_type = 'model.called'
+  AND (CAST(:since AS timestamptz) IS NULL OR e.occurred_at >= :since)
+  AND (CAST(:agent_id AS uuid) IS NULL OR x.agent_id = :agent_id)
+GROUP BY 1, 2 ORDER BY calls DESC
+"""
+
+_TOOL_USAGE = """
+SELECT payload->>'tool' AS tool,
+       count(*) FILTER (WHERE event_type = 'tool.called') AS calls,
+       count(*) FILTER (WHERE event_type = 'tool.completed' AND (payload->>'is_error')::bool)
+           AS errors,
+       count(*) FILTER (WHERE event_type = 'tool.failed') AS failures,
+       count(*) FILTER (WHERE event_type = 'tool.denied') AS denials,
+       count(*) FILTER (WHERE event_type = 'tool.called' AND (payload->>'invocation')::int > 1)
+           AS reinvocations
+FROM events
+WHERE event_type IN ('tool.called', 'tool.completed', 'tool.failed', 'tool.denied')
+  AND (CAST(:since AS timestamptz) IS NULL OR occurred_at >= :since)
+GROUP BY 1 ORDER BY calls DESC, tool
+"""
+
+_COST_BY_AGENT = """
+SELECT a.name AS key, coalesce(sum(x.cost_micro_usd), 0) AS cost, count(x.id) AS executions
+FROM executions x JOIN agents a ON a.id = x.agent_id
+WHERE CAST(:since AS timestamptz) IS NULL OR x.started_at >= :since
+GROUP BY a.name ORDER BY cost DESC, key
+"""
+
+_COST_BY_DAY = """
+SELECT to_char(date_trunc('day', x.started_at), 'YYYY-MM-DD') AS key,
+       coalesce(sum(x.cost_micro_usd), 0) AS cost, count(x.id) AS executions
+FROM executions x
+WHERE CAST(:since AS timestamptz) IS NULL OR x.started_at >= :since
+GROUP BY 1 ORDER BY 1
+"""
+
+_MISSION_SUMMARIES = """
+SELECT m.id, m.objective, m.status, m.created_at, m.updated_at,
+       coalesce((SELECT sum(cost_micro_usd) FROM executions WHERE mission_id = m.id), 0) AS cost,
+       coalesce((SELECT sum(input_tokens) FROM executions WHERE mission_id = m.id), 0) AS input,
+       coalesce((SELECT sum(output_tokens) FROM executions WHERE mission_id = m.id), 0) AS output,
+       coalesce((SELECT sum(cache_read_input_tokens) FROM executions WHERE mission_id = m.id), 0)
+           AS cache_read,
+       (SELECT count(*) FROM tasks WHERE mission_id = m.id) AS tasks_total,
+       (SELECT count(*) FROM tasks WHERE mission_id = m.id AND status = 'COMPLETED')
+           AS tasks_completed
+FROM missions m
+WHERE CAST(:status AS text) IS NULL OR m.status = :status
+ORDER BY m.created_at DESC
+LIMIT :limit
+"""
+
+_AGENT_DIMENSIONS = """
+SELECT dimension, avg(score) AS mean, count(*) AS samples
+FROM evaluation_results
+WHERE agent_id = :agent_id AND scope = 'task' AND score IS NOT NULL
+GROUP BY dimension ORDER BY dimension
+"""
+
+_AGENT_FINDINGS = """
+SELECT f->>'code' AS key, count(*) AS n
+FROM evaluation_results r, jsonb_array_elements(r.findings) f
+WHERE r.agent_id = :agent_id
+GROUP BY 1 ORDER BY n DESC, key LIMIT 10
+"""
+
+
+class _Insights(_Repository):
+    async def missions(self, *, limit: int, status: str | None = None) -> list[MissionSummary]:
+        rows = await self._connection.execute(
+            text(_MISSION_SUMMARIES), {"limit": limit, "status": status}
+        )
+        return [
+            MissionSummary(
+                id=row.id,
+                objective=row.objective,
+                status=row.status,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                cost_micro_usd=int(row.cost),
+                input_tokens=int(row.input),
+                output_tokens=int(row.output),
+                cache_read_input_tokens=int(row.cache_read),
+                tasks_total=int(row.tasks_total),
+                tasks_completed=int(row.tasks_completed),
+            )
+            for row in rows
+        ]
+
+    async def overview(self, since: datetime | None) -> Overview:
+        window = {"since": since}
+        return Overview(
+            since=since,
+            missions_by_status=await self._counts(
+                select(t.missions.c.status, func.count())
+                .where(_since(t.missions.c.created_at, since))
+                .group_by(t.missions.c.status)
+            ),
+            executions_by_status=await self._counts(
+                select(t.executions.c.status, func.count())
+                .where(_since(t.executions.c.started_at, since))
+                .group_by(t.executions.c.status)
+            ),
+            failures_by_kind=await self._counts(
+                select(t.executions.c.failure_kind, func.count())
+                .where(
+                    t.executions.c.failure_kind.is_not(None),
+                    _since(t.executions.c.started_at, since),
+                )
+                .group_by(t.executions.c.failure_kind)
+            ),
+            models=await self._models(since, None),
+            tools=tuple(
+                ToolUsage(
+                    tool=row.tool,
+                    calls=int(row.calls),
+                    errors=int(row.errors),
+                    failures=int(row.failures),
+                    denials=int(row.denials),
+                    reinvocations=int(row.reinvocations),
+                )
+                for row in await self._connection.execute(text(_TOOL_USAGE), window)
+            ),
+            cost_by_agent=await self._shares(_COST_BY_AGENT, window),
+            cost_by_day=await self._shares(_COST_BY_DAY, window),
+            pending_approvals=int(
+                await self._connection.scalar(
+                    select(func.count()).where(t.approvals.c.status == "PENDING")
+                )
+                or 0
+            ),
+        )
+
+    async def agent_usage(self, agent_id: UUID) -> AgentUsage:
+        totals = (
+            await self._connection.execute(
+                select(
+                    func.count(), func.coalesce(func.sum(t.executions.c.cost_micro_usd), 0)
+                ).where(t.executions.c.agent_id == agent_id)
+            )
+        ).one()
+        return AgentUsage(
+            agent_id=agent_id,
+            executions=int(totals[0]),
+            cost_micro_usd=int(totals[1]),
+            models=await self._models(None, agent_id),
+            failures_by_kind=await self._counts(
+                select(t.executions.c.failure_kind, func.count())
+                .where(
+                    t.executions.c.agent_id == agent_id, t.executions.c.failure_kind.is_not(None)
+                )
+                .group_by(t.executions.c.failure_kind)
+            ),
+            dimensions=tuple(
+                DimensionMean(row.dimension, float(row.mean), int(row.samples))
+                for row in await self._connection.execute(
+                    text(_AGENT_DIMENSIONS), {"agent_id": agent_id}
+                )
+            ),
+            findings=tuple(
+                Count(row.key, int(row.n))
+                for row in await self._connection.execute(
+                    text(_AGENT_FINDINGS), {"agent_id": agent_id}
+                )
+            ),
+        )
+
+    async def _models(
+        self, since: datetime | None, agent_id: UUID | None
+    ) -> tuple[ModelUsage, ...]:
+        rows = await self._connection.execute(
+            text(_MODEL_USAGE), {"since": since, "agent_id": agent_id}
+        )
+        return tuple(
+            ModelUsage(
+                provider=row.provider,
+                model=row.model,
+                calls=int(row.calls),
+                latency_p50_ms=float(row.p50),
+                latency_p95_ms=float(row.p95),
+                latency_p99_ms=float(row.p99),
+                input_tokens=int(row.input_tokens),
+                output_tokens=int(row.output_tokens),
+                cache_read_input_tokens=int(row.cache_read),
+                cache_creation_input_tokens=int(row.cache_write),
+                cost_micro_usd=int(row.cost),
+                cache_savings_micro_usd=int(row.savings),
+            )
+            for row in rows
+        )
+
+    async def _counts(self, statement: Any) -> tuple[Count, ...]:
+        rows = await self._connection.execute(statement)
+        return tuple(sorted((Count(str(key), int(n)) for key, n in rows), key=lambda c: c.key))
+
+    async def _shares(self, query: str, window: dict[str, Any]) -> tuple[CostShare, ...]:
+        rows = await self._connection.execute(text(query), window)
+        return tuple(CostShare(row.key, int(row.cost), int(row.executions)) for row in rows)
+
+
+def _since(column: Any, since: datetime | None) -> Any:
+    return column >= since if since is not None else true()

@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from forge.domain.events import EventRecord
 from forge.domain.execution import Execution
+from forge.domain.insights import MissionSummary
 from forge.domain.mission import Mission
 from forge.domain.risk import RiskLevel
 from forge.domain.task import Task
@@ -208,3 +209,33 @@ def _cache_hit_rate(execution: Execution) -> float:
     usage = execution.usage
     total = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
     return round(usage.cache_read_input_tokens / total, 4) if total else 0.0
+
+
+class MissionSummaryView(BaseModel):
+    id: UUID
+    objective: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    cost_micro_usd: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    tasks_total: int
+    tasks_completed: int
+
+    @classmethod
+    def of(cls, m: MissionSummary) -> "MissionSummaryView":
+        return cls(
+            id=m.id,
+            objective=m.objective,
+            status=m.status,
+            created_at=m.created_at,
+            updated_at=m.updated_at,
+            cost_micro_usd=m.cost_micro_usd,
+            input_tokens=m.input_tokens,
+            output_tokens=m.output_tokens,
+            cache_read_input_tokens=m.cache_read_input_tokens,
+            tasks_total=m.tasks_total,
+            tasks_completed=m.tasks_completed,
+        )

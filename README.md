@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-9 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants), on either of two durable execution backends (PostgreSQL, or Temporal) that survive worker crashes, stale workers, and database outages without duplicating side effects. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-10 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants), on either of two durable execution backends (PostgreSQL, or Temporal) that survive worker crashes, stale workers, and database outages without duplicating side effects, and observed through a Next.js control plane. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -113,6 +113,27 @@ an agent `["metrics.read", "deployment.rollback"]` and the mission
 A waiting execution holds no worker. Approvals expire after
 `FORGE_APPROVAL_TTL_SECONDS` (default 86400).
 
+## Control plane
+
+`make up` also serves the UI at <http://127.0.0.1:13000>
+([`docs/decisions/0012`](docs/decisions/0012-control-plane-ui.md)).
+
+| Area | Pages |
+|---|---|
+| Operate | Dashboard, missions, approvals |
+| Agents | Agents, capability graph, skills |
+| Measure | Evaluations, benchmarks, observability, costs |
+| Govern | Policies, including tools and the audit log |
+
+Mission detail shows a mission from planning to evaluation:
+- the task DAG and routing
+- every model call (latency, tokens, cache use, cost) and tool call (outcome, latency, re-executions)
+- results, the evaluation, and the live event stream
+
+Agent detail shows competency with uncertainty, reliability, evaluation dimensions, failure clusters, model usage and cost.
+
+To decide an approval in the UI, paste your operator token into the form. It is sent once and never stored. UI checks: `make ui-install ui-check`.
+
 ## Durability and Temporal
 
 Two execution backends share one contract
@@ -138,6 +159,7 @@ Tests:
 | PostgreSQL | `127.0.0.1:15432` | `FORGE_POSTGRES_HOST_PORT` |
 | Redis      | `127.0.0.1:16379` | `FORGE_REDIS_HOST_PORT`    |
 | API        | `127.0.0.1:18000` | `FORGE_API_HOST_PORT`      |
+| UI         | `127.0.0.1:13000` | `FORGE_UI_HOST_PORT`       |
 | Temporal   | `127.0.0.1:17233` (UI `18233`) | `FORGE_TEMPORAL_HOST_PORT` (profile `temporal`) |
 
 The credentials in `compose.yaml` are development defaults only.
@@ -185,6 +207,7 @@ src/forge/
   evaluation/       # evaluators, benchmarks, evaluation worker
   capabilities/     # capability graph, competency, reliability, fitness
   learning/         # failure analysis, gaps, skill generation, validation, promotion
+ui/                 # Next.js control plane (npm; `make ui-check`)
   api/              # FastAPI adapter and composition root (python -m forge.api)
   infrastructure/   # PostgreSQL unit of work, Redis, migrations
   observability/    # structured logging, OpenTelemetry tracing

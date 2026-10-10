@@ -27,6 +27,19 @@ jobs:
       - run: make boundaries
       - run: make test
 
+  ui:
+    name: Control-plane UI (lint, types, unit tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.20.0"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: make ui-install
+      - run: make ui-check
+
   integration:
     name: Integration tests and migrations
     runs-on: ubuntu-latest

@@ -1,10 +1,10 @@
 """Evaluation and benchmark endpoints."""
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
 from forge.api.dependencies import clock, uow_factory
@@ -161,6 +161,27 @@ async def start_run(name: str, body: RunRequest, request: Request) -> RunView:
         budget_micro_usd=body.budget_micro_usd,
     )
     return await _run_view(request, run.id)
+
+
+@router.get("/evaluations")
+async def recent_evaluations(
+    request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50
+) -> list[EvaluationView]:
+    async with uow_factory(request)() as uow:
+        return [EvaluationView.of(e) for e in await uow.evaluations.recent(limit)]
+
+
+@router.get("/benchmark-runs")
+async def list_runs(
+    request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50
+) -> list[RunView]:
+    async with uow_factory(request)() as uow:
+        runs = await uow.benchmarks.list_runs(limit)
+        views = []
+        for run in runs:
+            items = await uow.benchmarks.run_items(run.id)
+            views.append(RunView.of(run, {item.case_key: item.mission_id for item in items}))
+    return views
 
 
 @router.get("/benchmark-runs/{run_id}")

@@ -79,6 +79,7 @@ class AgentSummary(BaseModel):
     fallback_models: list[str]
     tools: list[str]
     capabilities: list[str]
+    skills: list[str]  # pinned "name@version" (ADR 0009)
     created_at: datetime
 
 
@@ -154,5 +155,6 @@ def _summary(agent: Any, version: Any) -> AgentSummary:
         fallback_models=[f"{m.provider}/{m.name}" for m in version.fallback_models],
         tools=list(version.tools),
         capabilities=list(version.capabilities),
+        skills=[f"{ref.name}@{ref.version}" for ref in version.skills],
         created_at=agent.created_at,
     )

@@ -311,6 +311,8 @@ Missions survive worker crashes and resume correctly without duplicate side effe
 
 # PHASE 10 — CONTROL PLANE UI
 
+Status: implemented. Decisions: `docs/decisions/0012`.
+
 ## Objective
 
 Build the operational interface.

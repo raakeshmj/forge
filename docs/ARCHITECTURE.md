@@ -652,6 +652,13 @@ React Flow should be used for:
 - agent graphs
 - capability graphs
 
+Implemented in `ui/` (`docs/decisions/0012`):
+- Next.js server components read the API's read models: `/missions`, `/insights`, `/agents/{id}/usage`, `/evaluations`, `/benchmark-runs`.
+- Browsers reach the API only through the UI's read-only `/api/forge` proxy.
+- A mission's events stream live over Server-Sent Events.
+- Operators decide approvals with their own token, which is forwarded once and never stored.
+- React Flow draws the task DAG and the capability graph. Agent performance is shown per capability rather than as an agent graph, because agents do not reference one another.
+
 ---
 
 # 23. KEY OWNERSHIP RULE

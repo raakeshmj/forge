@@ -1,0 +1,100 @@
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --ink: #1d1f23;
+  --muted: #5e6470;
+  --line: #e2e3e6;
+  --accent: #2f5bd3;
+  --ok: #1f7a4d;
+  --warn: #a15c07;
+  --bad: #b3261e;
+  --wait: #6b4fbb;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121316;
+    --panel: #1b1d21;
+    --ink: #e7e8ea;
+    --muted: #9aa0aa;
+    --line: #2c2f35;
+    --accent: #7c9cff;
+    --ok: #4cc38a;
+    --warn: #f0a742;
+    --bad: #ff7a70;
+    --wait: #b39dff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.shell { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; }
+
+nav.side {
+  border-right: 1px solid var(--line);
+  padding: 20px 14px;
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+nav.side .brand { font-weight: 700; letter-spacing: 0.08em; margin-bottom: 18px; }
+nav.side a { display: block; padding: 5px 8px; border-radius: 6px; color: var(--ink); }
+nav.side a:hover { background: var(--bg); text-decoration: none; }
+nav.side .group { color: var(--muted); font-size: 11px; text-transform: uppercase; margin: 14px 8px 4px; }
+
+main { padding: 24px 32px; min-width: 0; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 28px 0 10px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.stat .label { color: var(--muted); font-size: 12px; }
+.stat .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; background: var(--bg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.empty { color: var(--muted); padding: 14px; background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; }
+
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid currentColor; }
+.s-COMPLETED, .s-APPROVED, .s-ACTIVE, .s-PROMOTED, .s-VALIDATED, .s-completed { color: var(--ok); }
+.s-FAILED, .s-DENIED, .s-QUARANTINED, .s-REJECTED, .s-failed, .s-denied, .s-error { color: var(--bad); }
+.s-WAITING_APPROVAL, .s-PENDING, .s-BLOCKED, .s-pending { color: var(--wait); }
+.s-RUNNING, .s-READY, .s-PLANNING, .s-VALIDATING, .s-CANDIDATE { color: var(--accent); }
+.s-CANCELLED, .s-EXPIRED, .s-DEPRECATED, .s-ROLLED_BACK { color: var(--muted); }
+
+.bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 80px; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.graph { height: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+pre.output { white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-family: var(--mono); font-size: 12px; margin: 0; }
+.feed { max-height: 360px; overflow: auto; }
+.feed li { font-family: var(--mono); font-size: 12px; padding: 2px 0; list-style: none; }
+.feed ul { margin: 0; padding: 0; }
+.live { color: var(--ok); }
+
+form.decide { display: grid; gap: 8px; margin-top: 10px; max-width: 520px; }
+form.decide input, form.decide textarea, form.decide select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+form.decide button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; justify-self: start; }
+.notice { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line); }
+.notice.bad { color: var(--bad); border-color: var(--bad); }
+.notice.ok { color: var(--ok); border-color: var(--ok); }

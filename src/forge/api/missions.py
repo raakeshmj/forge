@@ -1,14 +1,19 @@
 """Mission endpoints: submit, inspect, cancel, and read the event history."""
 
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from forge.api.dependencies import clock, uow_factory, wakeup
-from forge.api.schemas import EventView, MissionCreate, MissionView
+from forge.api.schemas import EventView, MissionCreate, MissionSummaryView, MissionView
 from forge.domain.execution import ExecutionStatus
 from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.plan import PlannedTask
+from forge.domain.repositories import StoreUnavailableError
 from forge.observability.logs import correlation_id
 from forge.observability.tracing import record_finished_mission
 from forge.orchestration.missions import (
@@ -64,9 +69,59 @@ async def create_mission(body: MissionCreate, request: Request) -> MissionView:
     return await _view(request, mission.id)
 
 
+@router.get("")
+async def list_missions(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+) -> list[MissionSummaryView]:
+    """Most recent first, with spend and progress (a read model, ADR 0012)."""
+    async with uow_factory(request)() as uow:
+        summaries = await uow.insights.missions(limit=limit, status=status_filter)
+    return [MissionSummaryView.of(m) for m in summaries]
+
+
 @router.get("/{mission_id}")
 async def get_mission(mission_id: UUID, request: Request) -> MissionView:
     return await _view(request, mission_id)
+
+
+@router.get("/{mission_id}/events/stream")
+async def stream_events(mission_id: UUID, request: Request) -> StreamingResponse:
+    """Server-Sent Events: every event of the mission once, in order, until it ends.
+
+    Each poll re-reads the mission's events and sends the unseen ones by id, so an event
+    committed late by a concurrent transaction is never skipped (ADR 0012).
+    """
+    async with uow_factory(request)() as uow:
+        await uow.missions.get(mission_id)  # 404 before the stream starts
+    poll = float(request.app.state.stream_poll_seconds)
+
+    async def frames() -> AsyncIterator[str]:
+        sent: set[UUID] = set()
+        while not await request.is_disconnected():
+            try:
+                async with uow_factory(request)() as uow:
+                    mission = await uow.missions.get(mission_id)
+                    records = await uow.events.list_for_mission(mission_id)
+            except StoreUnavailableError:  # recovery: end; EventSource reconnects by itself
+                return
+            for record in records:
+                if record.id not in sent:
+                    sent.add(record.id)
+                    data = EventView.of(record).model_dump_json()
+                    yield f"id: {record.id}\ndata: {data}\n\n"  # type is in the data
+            if mission.status.is_terminal:
+                yield "event: end\ndata: {}\n\n"
+                return
+            yield ": keepalive\n\n"
+            await asyncio.sleep(poll)
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{mission_id}/cancel")
