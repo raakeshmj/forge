@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from forge.api.dependencies import clock, uow_factory, wakeup
 from forge.api.schemas import EventView, MissionCreate, MissionSummaryView, MissionView
+from forge.domain.events import EvaluationCompleted
 from forge.domain.execution import ExecutionStatus
 from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.plan import PlannedTask
@@ -91,7 +92,9 @@ async def stream_events(mission_id: UUID, request: Request) -> StreamingResponse
     """Server-Sent Events: every event of the mission once, in order, until it ends.
 
     Each poll re-reads the mission's events and sends the unseen ones by id, so an event
-    committed late by a concurrent transaction is never skipped (ADR 0012).
+    committed late by a concurrent transaction is never skipped (ADR 0012). A mission's
+    history ends with its evaluation, which workers record after it finishes, so the
+    stream ends only once the mission is terminal and evaluated.
     """
     async with uow_factory(request)() as uow:
         await uow.missions.get(mission_id)  # 404 before the stream starts
@@ -111,7 +114,8 @@ async def stream_events(mission_id: UUID, request: Request) -> StreamingResponse
                     sent.add(record.id)
                     data = EventView.of(record).model_dump_json()
                     yield f"id: {record.id}\ndata: {data}\n\n"  # type is in the data
-            if mission.status.is_terminal:
+            evaluated = any(r.event_type == EvaluationCompleted.event_type for r in records)
+            if mission.status.is_terminal and evaluated:
                 yield "event: end\ndata: {}\n\n"
                 return
             yield ": keepalive\n\n"

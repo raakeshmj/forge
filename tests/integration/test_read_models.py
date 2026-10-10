@@ -1,5 +1,6 @@
 """Control-plane read models (ADR 0012): numbers reconcile with the system of record."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -116,6 +117,24 @@ async def test_agent_usage_and_evaluation_lists(api: httpx2.AsyncClient, uow: Uo
     assert [e["mission_id"] for e in evaluations] == [str(mission_id)]
     assert runs == []
     assert (await api.get(f"/agents/{UUID(int=5)}/usage")).status_code == 404
+
+
+async def test_the_event_stream_stays_open_until_the_finished_mission_is_evaluated(
+    api: httpx2.AsyncClient, uow: UowFactory
+) -> None:
+    mission_id = await submit(uow)
+    await run_next(runtime(uow, ScriptedModel(tool_call(), answer()), RecordingTool()))  # COMPLETED
+
+    stream = asyncio.create_task(api.get(f"/missions/{mission_id}/events/stream"))
+    await asyncio.sleep(0.4)  # several polls of a terminal but unevaluated mission
+    assert not stream.done()
+
+    await evaluate_mission(uow, CLOCK, mission_id, trigger="auto")
+    response = await asyncio.wait_for(stream, timeout=10)
+
+    frames = [f for f in response.text.split("\n\n") if f and not f.startswith(":")]
+    assert any('"evaluation.completed"' in f for f in frames)  # the history ends with it
+    assert frames[-1].startswith("event: end")
 
 
 async def test_the_event_stream_delivers_every_event_once_then_ends(
