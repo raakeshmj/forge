@@ -341,6 +341,8 @@ A user can observe an entire mission from planning through evaluation and inspec
 
 # PHASE 11 — BENCHMARKING AND OPTIMIZATION
 
+Status: implemented. Decisions: `docs/decisions/0013`. Results: `docs/BENCHMARKS.md` (`make benchmark`).
+
 ## Objective
 
 Demonstrate FORGE's measurable advantages.

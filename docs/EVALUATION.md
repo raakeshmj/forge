@@ -223,6 +223,9 @@ Implemented as immutable `(name, version)` datasets; runs report pass rate, mean
 score per dimension, expected calibration error, and cost per success
 (`src/forge/evaluation/benchmarks.py`).
 
+FORGE's own mechanisms are benchmarked the same way: every arm's missions are benchmark
+runs scored against this ground truth (`docs/decisions/0013`, `docs/BENCHMARKS.md`).
+
 ---
 
 # 15. EVALUATION PRINCIPLE

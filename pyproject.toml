@@ -135,6 +135,16 @@ forbidden_modules = ["mcp"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
+name = "The benchmark harness drives the system; nothing in the system depends on it"
+type = "forbidden"
+source_modules = [
+    "forge.domain", "forge.orchestration", "forge.runtime", "forge.inference", "forge.tools",
+    "forge.security", "forge.evaluation", "forge.capabilities", "forge.learning",
+    "forge.observability", "forge.infrastructure", "forge.api",
+]
+forbidden_modules = ["forge.benchmarking"]
+
+[[tool.importlinter.contracts]]
 name = "Temporal SDK is confined to its adapter"
 type = "forbidden"
 source_modules = [

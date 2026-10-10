@@ -11,6 +11,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from forge.api.app import create_app
+from forge.domain.common import DomainError
 from forge.domain.evaluation import BenchmarkRunStatus, Dimension, Scope
 from forge.domain.mission import MissionStatus
 from forge.evaluation import benchmarks
@@ -148,6 +149,33 @@ async def test_a_benchmark_run_measures_an_agent_against_ground_truth(uow: UowFa
     }
     assert summary["expected_calibration_error"] is not None
     assert isinstance(summary["cost_per_success_micro_usd"], int)
+
+
+async def test_recording_a_run_requires_exactly_one_mission_per_case(uow: UowFactory) -> None:
+    await benchmarks.register_builtin(uow, CLOCK)
+    async with uow() as tx:
+        definition = await tx.benchmarks.get("incident-investigation", 1)
+    version = await register_agent(
+        uow,
+        CLOCK,
+        name="recorder",
+        role="investigator",
+        instructions="Investigate.",
+        model=DEMO_MODEL,
+        tools=["metrics.read"],
+        capabilities=["incident-response"],
+        correlation_id=None,
+    )
+    mission = await submit(uow)
+    keys = [case.key for case in definition.cases]
+
+    for missions in ({keys[0]: mission}, {**dict.fromkeys(keys, mission), "unknown": mission}):
+        with pytest.raises(DomainError, match="one mission per case"):
+            await benchmarks.record_run(
+                uow, CLOCK, definition, agent_id=version.agent_id, missions=missions
+            )
+    async with uow() as tx:
+        assert await tx.benchmarks.list_runs(limit=10) == []
 
 
 async def test_evaluation_api(uow: UowFactory) -> None:

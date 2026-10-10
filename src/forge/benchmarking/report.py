@@ -1,0 +1,218 @@
+"""Benchmark results as JSON (every number) and Markdown (the readable account)."""
+
+import json
+from dataclasses import asdict
+from typing import Any
+
+from forge.benchmarking.harness import Results
+from forge.benchmarking.metrics import ArmResult, Percentiles
+
+
+def effects(results: Results) -> dict[str, dict[str, Any]]:
+    """Each mechanism's effect, as the difference between two named arms."""
+    arm = results.arm
+
+    def change(after: float | int | None, before: float | int | None) -> float | None:
+        if after is None or before is None:
+            return None
+        return round(float(after) - float(before), 4)
+
+    def relative(after: int, before: int) -> float | None:
+        return round((after - before) / before, 4) if before else None
+
+    routed, naive = arm("forge_routing"), arm("naive_multi_agent")
+    single, learned = arm("single_agent"), arm("after_learning")
+    return {
+        "learning": {
+            "compares": "after_learning vs single_agent (same agent, before and after promotion)",
+            "success_rate_delta": change(learned.success_rate, single.success_rate),
+            "mean_correctness_delta": change(learned.mean_correctness, single.mean_correctness),
+            "validated_correctness_delta": results.learning.validated_correctness_delta,
+            "cycle_status": results.learning.status,
+            "skill": results.learning.skill,
+        },
+        "routing": {
+            "compares": "forge_routing vs naive_multi_agent (same graph and agents)",
+            "success_rate_delta": change(routed.success_rate, naive.success_rate),
+            "cost_per_success_change": relative(
+                routed.cost_per_success_micro_usd or 0, naive.cost_per_success_micro_usd or 0
+            ),
+        },
+        "multi_agent_overhead": {
+            "compares": "naive_multi_agent vs single_agent",
+            "cost_change": relative(naive.cost_micro_usd, single.cost_micro_usd),
+            "tool_calls_per_mission_delta": change(
+                naive.tool_calls_per_mission, single.tool_calls_per_mission
+            ),
+        },
+        "context_optimization": {
+            "compares": "forge_routing vs naive_context (same plan, different layout)",
+            "cache_hit_rate_delta": change(
+                routed.cache_hit_rate, arm("naive_context").cache_hit_rate
+            ),
+            "cost_change": relative(routed.cost_micro_usd, arm("naive_context").cost_micro_usd),
+        },
+        "caching": {
+            "compares": "forge_routing vs no_caching",
+            "cache_hit_rate": routed.cache_hit_rate,
+            "cost_change": relative(routed.cost_micro_usd, arm("no_caching").cost_micro_usd),
+            "cache_savings_micro_usd": routed.cache_savings_micro_usd,
+        },
+        "durability": {
+            "compares": "chaos and chaos_side_effects arms",
+            "injected_crashes": results.chaos_crashes,
+            "recovery_rate": arm("chaos").recovery_rate,
+            "completion_rate": arm("chaos").completion_rate,
+            "side_effect_duplicate_rate": arm("chaos_side_effects").duplicate_rate,
+            "side_effect_completion_rate": arm("chaos_side_effects").completion_rate,
+        },
+    }
+
+
+def to_json(results: Results, environment: dict[str, Any]) -> str:
+    payload = {
+        "environment": environment,
+        "config": asdict(results.config),
+        "arms": [asdict(a) for a in results.arms],
+        "learning": {**asdict(results.learning), "cycle_id": str(results.learning.cycle_id)},
+        "effects": effects(results),
+    }
+    return json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+
+
+def _usd(micro: int | None) -> str:
+    return "—" if micro is None else f"${micro / 1_000_000:.6f}"
+
+
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{value * 100:.1f}%"
+
+
+def _num(value: float | None, digits: int = 2) -> str:
+    return "—" if value is None else f"{value:.{digits}f}"
+
+
+def _ms(p: Percentiles) -> str:
+    return " / ".join("—" if v is None else f"{v:.0f}" for v in (p.p50, p.p95, p.p99))
+
+
+def _signed(value: float | None, percent: bool = False) -> str:
+    if value is None:
+        return "—"
+    return f"{value * 100:+.1f}%" if percent else f"{value:+.2f}"
+
+
+def to_markdown(results: Results, environment: dict[str, Any]) -> str:
+    e = effects(results)
+    rows = [
+        "| Arm | Missions | Success | Correctness | Evidence | Tool calls / mission "
+        "| Mission latency p50/p95/p99 ms | Model latency p50/p95/p99 ms | Tokens in / out "
+        "| Cached tokens | Cache hit | Cost | Cost / success | ECE | Recovery | Duplicates |",
+        "|" + "---|" * 16,
+    ]
+    for a in results.arms:
+        rows.append(_row(a))
+    c = results.config
+    return "\n".join(
+        [
+            "# FORGE benchmark results",
+            "",
+            "Generated by `make benchmark` (`python -m forge.benchmarking`). Do not edit by hand;",
+            "rerun to regenerate. Method and caveats: `docs/decisions/0013`.",
+            "",
+            f"- Commit `{environment.get('commit')}`, {environment.get('generated_at')}",
+            f"- {environment.get('python')} on {environment.get('platform')}; "
+            f"{environment.get('postgres')}",
+            f"- Dataset `incident-investigation@1` (3 cases), {c.repeats} repeats per arm; "
+            f"seed {c.seed}; chaos crash rate {c.crash_rate}; deterministic demo provider",
+            "",
+            "## Effects",
+            "",
+            "| Mechanism | Comparison | Result |",
+            "|---|---|---|",
+            f"| Learning | {e['learning']['compares']} | success "
+            f"{_signed(e['learning']['success_rate_delta'], True)}, correctness "
+            f"{_signed(e['learning']['mean_correctness_delta'])} (validated offline: "
+            f"{_signed(e['learning']['validated_correctness_delta'])}; skill "
+            f"`{e['learning']['skill']}`, cycle {e['learning']['cycle_status'].lower()}) |",
+            f"| Routing | {e['routing']['compares']} | success "
+            f"{_signed(e['routing']['success_rate_delta'], True)}, cost per success "
+            f"{_signed(e['routing']['cost_per_success_change'], True)} |",
+            f"| Multi-agent overhead | {e['multi_agent_overhead']['compares']} | cost "
+            f"{_signed(e['multi_agent_overhead']['cost_change'], True)}, tool calls per mission "
+            f"{_signed(e['multi_agent_overhead']['tool_calls_per_mission_delta'])} |",
+            f"| Context optimisation | {e['context_optimization']['compares']} | cache hit rate "
+            f"{_signed(e['context_optimization']['cache_hit_rate_delta'], True)}, cost "
+            f"{_signed(e['context_optimization']['cost_change'], True)} |",
+            f"| Caching | {e['caching']['compares']} | hit rate "
+            f"{_pct(e['caching']['cache_hit_rate'])}, cost "
+            f"{_signed(e['caching']['cost_change'], True)}, saved "
+            f"{_usd(e['caching']['cache_savings_micro_usd'])} |",
+            f"| Durability | {e['durability']['compares']} | "
+            f"{e['durability']['injected_crashes']} injected crashes; recovery "
+            f"{_pct(e['durability']['recovery_rate'])} (completion "
+            f"{_pct(e['durability']['completion_rate'])}); with a non-idempotent tool: "
+            f"duplicate side effects {_pct(e['durability']['side_effect_duplicate_rate'])}, "
+            f"completion {_pct(e['durability']['side_effect_completion_rate'])} |",
+            "",
+            "## Arms",
+            "",
+            *rows,
+            "",
+            "Arms:",
+            "",
+            *(f"- `{a.name}`: {a.description}" for a in results.arms),
+            "",
+            "Recorded failures by arm (execution failure kinds):",
+            "",
+            *(
+                f"- `{a.name}`: "
+                + (", ".join(f"{k}: {n}" for k, n in a.failures_by_kind.items()) or "none")
+                for a in results.arms
+            ),
+            "",
+            "## Reading these numbers",
+            "",
+            "- The provider is the deterministic demo model: correctness, tokens, cache use, and",
+            "  cost reproduce exactly for a seed; latencies are this machine's and include no",
+            "  network or model time, so they measure FORGE's own overhead.",
+            "- Correctness effects depend on the model. The demo model follows skill text and",
+            "  otherwise always investigates checkout, so it shows what routing and learning do",
+            "  with agents of different measured ability, not how good a real model is.",
+            "- `chaos` measures recovery: crashed missions resume from their last checkpoint and",
+            "  a READ_ONLY read may safely run again; the failure kinds below say why the rest",
+            "  failed at this deliberately high crash rate.",
+            "- `chaos_side_effects` failures are expected and correct: once a NON_IDEMPOTENT",
+            "  call's intent is recorded, a crash leaves its outcome unknown, and FORGE ends the",
+            "  mission as TOOL_OUTCOME_UNKNOWN rather than risk repeating the effect (ADR 0002).",
+            "  Duplicates count effects that really happened twice; they must be zero.",
+            "- Cache use depends on prefix size: a prefix below the model profile's minimum",
+            "  cacheable size is not cached (ADR 0004). A promoted skill lengthens the stable",
+            "  prefix, so arms that run the skilled agent cache a larger share of their prompts.",
+            "- Three cases demonstrate mechanisms; they are not statistical evidence across",
+            "  domains.",
+            "",
+        ]
+    )
+
+
+def _row(a: ArmResult) -> str:
+    cells = [
+        f"`{a.name}`",
+        str(a.missions),
+        _pct(a.success_rate),
+        _num(a.mean_correctness),
+        _num(a.mean_evidence_quality),
+        _num(a.tool_calls_per_mission, 1),
+        _ms(a.mission_latency_ms),
+        _ms(a.model_latency_ms),
+        f"{a.input_tokens:,} / {a.output_tokens:,}",
+        f"{a.cache_read_tokens:,}",
+        _pct(a.cache_hit_rate),
+        _usd(a.cost_micro_usd),
+        _usd(a.cost_per_success_micro_usd),
+        _num(a.expected_calibration_error, 3),
+        _pct(a.recovery_rate),
+        _pct(a.duplicate_rate),
+    ]
+    return "| " + " | ".join(cells) + " |"

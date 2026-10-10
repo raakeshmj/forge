@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-10 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants), on either of two durable execution backends (PostgreSQL, or Temporal) that survive worker crashes, stale workers, and database outages without duplicating side effects, and observed through a Next.js control plane. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-11 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants), on either of two durable execution backends (PostgreSQL, or Temporal) that survive worker crashes, stale workers, and database outages without duplicating side effects, and observed through a Next.js control plane. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -112,6 +112,19 @@ an agent `["metrics.read", "deployment.rollback"]` and the mission
 `"max_risk": "HIGH"`, and the demo investigator will ask to roll back checkout.
 A waiting execution holds no worker. Approvals expire after
 `FORGE_APPROVAL_TTL_SECONDS` (default 86400).
+
+## Benchmarks
+
+`make benchmark` runs a reproducible comparison of FORGE's mechanisms on the production code paths with the deterministic demo provider. The arms are:
+- single agent
+- after learning
+- naive multi-agent
+- FORGE routing
+- naive context layout
+- no caching
+- two chaos arms
+
+Results go to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and `benchmarks/results/latest.json`. Method and caveats are in [`docs/decisions/0013`](docs/decisions/0013-reproducible-benchmarking.md). The same seed reproduces every number except wall-clock latency.
 
 ## Control plane
 

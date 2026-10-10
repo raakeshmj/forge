@@ -1,0 +1,331 @@
+{
+  "arms": [
+    {
+      "cache_hit_rate": 0.3912111468381565,
+      "cache_read_tokens": 2190,
+      "cache_savings_micro_usd": 1693,
+      "cache_write_tokens": 1095,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 8945,
+      "cost_per_success_micro_usd": 2981,
+      "description": "One generalist agent, one task per case.",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.4667,
+      "failures_by_kind": {},
+      "input_tokens": 2313,
+      "mean_correctness": 0.3333333333333333,
+      "mean_evidence_quality": 0.6666666666666666,
+      "mission_latency_ms": {
+        "p50": 413.514,
+        "p95": 589.041,
+        "p99": 603.0538
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "single_agent",
+      "output_tokens": 1008,
+      "passes": 3,
+      "recovery_rate": null,
+      "success_rate": 0.3333333333333333,
+      "tool_calls_per_mission": 1.0
+    },
+    {
+      "cache_hit_rate": 0.8999012183075403,
+      "cache_read_tokens": 8199,
+      "cache_savings_micro_usd": 7142,
+      "cache_write_tokens": 912,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 7339,
+      "cost_per_success_micro_usd": 815,
+      "description": "The same agent after a validated, promoted skill (ADR 0009).",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {},
+      "input_tokens": 0,
+      "mean_correctness": 1.0,
+      "mean_evidence_quality": 1.0,
+      "mission_latency_ms": {
+        "p50": 311.519,
+        "p95": 468.7348,
+        "p99": 485.20456
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "after_learning",
+      "output_tokens": 1074,
+      "passes": 9,
+      "recovery_rate": null,
+      "success_rate": 1.0,
+      "tool_calls_per_mission": 1.0
+    },
+    {
+      "cache_hit_rate": 0.5834994262245576,
+      "cache_read_tokens": 9661,
+      "cache_savings_micro_usd": 7286,
+      "cache_write_tokens": 5576,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 19681,
+      "cost_per_success_micro_usd": 3280,
+      "description": "Gather -> conclude per case; agents assigned round-robin, ignoring ability.",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.1611,
+      "failures_by_kind": {},
+      "input_tokens": 1320,
+      "mean_correctness": 0.6666666666666666,
+      "mean_evidence_quality": 1.0,
+      "mission_latency_ms": {
+        "p50": 548.936,
+        "p95": 941.6195999999999,
+        "p99": 981.7687199999999
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "naive_multi_agent",
+      "output_tokens": 2082,
+      "passes": 6,
+      "recovery_rate": null,
+      "success_rate": 0.6666666666666666,
+      "tool_calls_per_mission": 2.0
+    },
+    {
+      "cache_hit_rate": 0.8987687419322808,
+      "cache_read_tokens": 18103,
+      "cache_savings_micro_usd": 15765,
+      "cache_write_tokens": 2039,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 15117,
+      "cost_per_success_micro_usd": 1679,
+      "description": "Gather -> conclude per case; agents chosen by measured fitness (ADR 0008).",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {},
+      "input_tokens": 0,
+      "mean_correctness": 1.0,
+      "mean_evidence_quality": 1.0,
+      "mission_latency_ms": {
+        "p50": 557.373,
+        "p95": 972.4097999999999,
+        "p99": 1008.64276
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "forge_routing",
+      "output_tokens": 2148,
+      "passes": 9,
+      "recovery_rate": null,
+      "success_rate": 1.0,
+      "tool_calls_per_mission": 2.0
+    },
+    {
+      "cache_hit_rate": 0.0,
+      "cache_read_tokens": 0,
+      "cache_savings_micro_usd": 0,
+      "cache_write_tokens": 0,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 31557,
+      "cost_per_success_micro_usd": 3506,
+      "description": "forge_routing with blind-concatenation context layout (dynamic header first).",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {},
+      "input_tokens": 20817,
+      "mean_correctness": 1.0,
+      "mean_evidence_quality": 1.0,
+      "mission_latency_ms": {
+        "p50": 587.702,
+        "p95": 965.1752,
+        "p99": 1001.2094400000001
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "naive_context",
+      "output_tokens": 2148,
+      "passes": 9,
+      "recovery_rate": null,
+      "success_rate": 1.0,
+      "tool_calls_per_mission": 2.0
+    },
+    {
+      "cache_hit_rate": 0.0,
+      "cache_read_tokens": 0,
+      "cache_savings_micro_usd": 0,
+      "cache_write_tokens": 0,
+      "completion_rate": 1.0,
+      "cost_micro_usd": 30882,
+      "cost_per_success_micro_usd": 3431,
+      "description": "forge_routing with provider prompt caching disabled.",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {},
+      "input_tokens": 20142,
+      "mean_correctness": 1.0,
+      "mean_evidence_quality": 1.0,
+      "mission_latency_ms": {
+        "p50": 595.023,
+        "p95": 974.5222,
+        "p99": 1011.88444
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "no_caching",
+      "output_tokens": 2148,
+      "passes": 9,
+      "recovery_rate": null,
+      "success_rate": 1.0,
+      "tool_calls_per_mission": 2.0
+    },
+    {
+      "cache_hit_rate": 0.8953392875474797,
+      "cache_read_tokens": 17443,
+      "cache_savings_micro_usd": 15171,
+      "cache_write_tokens": 2039,
+      "completion_rate": 0.8888888888888888,
+      "cost_micro_usd": 14751,
+      "cost_per_success_micro_usd": 1843,
+      "description": "forge_routing with seeded worker crashes before model calls and around tool calls; metrics.read keeps its real READ_ONLY classification.",
+      "duplicate_rate": null,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {
+        "RECOVERY_EXHAUSTED": 1
+      },
+      "input_tokens": 0,
+      "mean_correctness": 0.8888888888888888,
+      "mean_evidence_quality": 0.8888888888888888,
+      "mission_latency_ms": {
+        "p50": 904.35,
+        "p95": 1498.407,
+        "p99": 1544.8693999999998
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.6599999999999966
+      },
+      "name": "chaos",
+      "output_tokens": 2088,
+      "passes": 8,
+      "recovery_rate": 0.875,
+      "success_rate": 0.8888888888888888,
+      "tool_calls_per_mission": 3.4444444444444446
+    },
+    {
+      "cache_hit_rate": 0.8770422136179054,
+      "cache_read_tokens": 9287,
+      "cache_savings_micro_usd": 8019,
+      "cache_write_tokens": 1302,
+      "completion_rate": 0.3333333333333333,
+      "cost_micro_usd": 8590,
+      "cost_per_success_micro_usd": 2863,
+      "description": "chaos, with metrics.read declared NON_IDEMPOTENT and its effects counted outside the database.",
+      "duplicate_rate": 0.0,
+      "expected_calibration_error": 0.15,
+      "failures_by_kind": {
+        "TOOL_OUTCOME_UNKNOWN": 6
+      },
+      "input_tokens": 0,
+      "mean_correctness": 0.3333333333333333,
+      "mean_evidence_quality": 0.3333333333333333,
+      "mission_latency_ms": {
+        "p50": 525.5300000000001,
+        "p95": 854.0287999999999,
+        "p99": 895.0969599999999
+      },
+      "missions": 9,
+      "model_latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "name": "chaos_side_effects",
+      "output_tokens": 1204,
+      "passes": 3,
+      "recovery_rate": 0.25,
+      "success_rate": 0.3333333333333333,
+      "tool_calls_per_mission": 1.4444444444444444
+    }
+  ],
+  "config": {
+    "concurrency": 1,
+    "crash_rate": 0.2,
+    "lease_seconds": 2.0,
+    "repeats": 3,
+    "seed": 7
+  },
+  "effects": {
+    "caching": {
+      "cache_hit_rate": 0.8987687419322808,
+      "cache_savings_micro_usd": 15765,
+      "compares": "forge_routing vs no_caching",
+      "cost_change": -0.5105
+    },
+    "context_optimization": {
+      "cache_hit_rate_delta": 0.8988,
+      "compares": "forge_routing vs naive_context (same plan, different layout)",
+      "cost_change": -0.521
+    },
+    "durability": {
+      "compares": "chaos and chaos_side_effects arms",
+      "completion_rate": 0.8888888888888888,
+      "injected_crashes": 34,
+      "recovery_rate": 0.875,
+      "side_effect_completion_rate": 0.3333333333333333,
+      "side_effect_duplicate_rate": 0.0
+    },
+    "learning": {
+      "compares": "after_learning vs single_agent (same agent, before and after promotion)",
+      "cycle_status": "PROMOTED",
+      "mean_correctness_delta": 0.6667,
+      "skill": "incident-response-practice@1",
+      "success_rate_delta": 0.6667,
+      "validated_correctness_delta": 1.0
+    },
+    "multi_agent_overhead": {
+      "compares": "naive_multi_agent vs single_agent",
+      "cost_change": 1.2002,
+      "tool_calls_per_mission_delta": 1.0
+    },
+    "routing": {
+      "compares": "forge_routing vs naive_multi_agent (same graph and agents)",
+      "cost_per_success_change": -0.4881,
+      "success_rate_delta": 0.3333
+    }
+  },
+  "environment": {
+    "commit": "phase-10-complete-dirty",
+    "generated_at": "2026-10-10T14:41:20+00:00",
+    "platform": "Darwin arm64",
+    "postgres": "PostgreSQL 17.11",
+    "python": "Python 3.12.9"
+  },
+  "learning": {
+    "cycle_id": "532a0324-d3f9-49b8-9bcd-fae29bf0b95b",
+    "skill": "incident-response-practice@1",
+    "status": "PROMOTED",
+    "validated_correctness_delta": 1.0
+  }
+}

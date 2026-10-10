@@ -5,10 +5,11 @@ them; the evaluation service scores each with its case's ground truth and
 completes the run once every mission is evaluated.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from forge.domain.common import JSONValue
+from forge.domain.common import DomainError, JSONValue
 from forge.domain.evaluation import (
     Benchmark,
     BenchmarkCase,
@@ -100,7 +101,7 @@ async def start_run(
         definition = await uow.benchmarks.get(benchmark, version)
         await uow.agents.get(agent_id)
     run_id = uuid4()
-    items = []
+    missions = {}
     for case in definition.cases:
         mission = await submit_mission(
             uow_factory,
@@ -114,7 +115,29 @@ async def start_run(
             ),
             correlation_id=f"benchmark:{run_id}:{case.key}",
         )
-        items.append(BenchmarkRunItem(run_id, case.key, mission.id))
+        missions[case.key] = mission.id
+    return await record_run(
+        uow_factory, clock, definition, agent_id=agent_id, missions=missions, run_id=run_id
+    )
+
+
+async def record_run(
+    uow_factory: UnitOfWorkFactory,
+    clock: Clock,
+    definition: Benchmark,
+    *,
+    agent_id: UUID,
+    missions: Mapping[str, UUID],
+    run_id: UUID | None = None,
+) -> BenchmarkRun:
+    """Score already-submitted missions against a benchmark's ground truth, one per case.
+
+    `agent_id` is the agent under test; multi-agent missions name the run's subject.
+    """
+    if set(missions) != {case.key for case in definition.cases}:
+        raise DomainError(f"{definition.ref} needs exactly one mission per case")
+    run_id = run_id or uuid4()
+    items = [BenchmarkRunItem(run_id, key, mission_id) for key, mission_id in missions.items()]
     run = BenchmarkRun(
         id=run_id,
         benchmark=definition.name,

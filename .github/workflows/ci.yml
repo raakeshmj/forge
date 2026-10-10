@@ -69,6 +69,8 @@ jobs:
       - run: make install
       - run: make migrate
       - run: make test-integration
+      - name: Benchmark runs and reproduces (ADR 0013)
+        run: make benchmark && git diff --stat -- docs/BENCHMARKS.md
 
   compose:
     name: Docker Compose stack
