@@ -20,6 +20,8 @@ from forge.inference.profiles import DEMO_MODEL, PROFILES
 from forge.infrastructure import postgres
 from forge.infrastructure.clock import SystemClock
 from forge.infrastructure.store import PostgresUnitOfWork
+from forge.infrastructure.temporal import service as temporal
+from forge.infrastructure.temporal.dispatch import DispatchSettings
 from forge.learning import worker as learning_worker
 from forge.learning.generation import DeterministicSkillGenerator
 from forge.observability.logs import configure_logging
@@ -98,11 +100,7 @@ async def serve(settings: WorkerSettings) -> None:
     await capability_engine.register_builtin(uow_factory, clock)
     worker = asyncio.create_task(
         _run_all(
-            Worker(
-                runtime,
-                poll_interval_seconds=settings.poll_interval_seconds,
-                concurrency=settings.concurrency,
-            ).run_until(stop),
+            await _executions(runtime, settings, stop),
             evaluation_worker.run_until(
                 uow_factory, clock, stop, poll_interval_seconds=settings.poll_interval_seconds
             ),
@@ -125,6 +123,26 @@ async def serve(settings: WorkerSettings) -> None:
     finally:
         await stack.aclose()
         await engine.dispose()
+
+
+async def _executions(
+    runtime: Runtime, settings: WorkerSettings, stop: asyncio.Event
+) -> Coroutine[Any, Any, None]:
+    """The execution backend (ADR 0011): Postgres claim loops, or Temporal workflows."""
+    if settings.temporal is None:
+        return Worker(
+            runtime,
+            poll_interval_seconds=settings.poll_interval_seconds,
+            concurrency=settings.concurrency,
+        ).run_until(stop)
+    client = await temporal.connect(settings.temporal.address, settings.temporal.namespace)
+    dispatch = DispatchSettings(
+        task_queue=settings.temporal.task_queue,
+        poll_interval_seconds=settings.poll_interval_seconds,
+        approval_poll_seconds=settings.temporal.approval_poll_seconds,
+        heartbeat_seconds=settings.lease_seconds,
+    )
+    return temporal.run_until(client, runtime, dispatch, stop, concurrency=settings.concurrency)
 
 
 async def _run_all(*loops: Coroutine[Any, Any, None]) -> None:

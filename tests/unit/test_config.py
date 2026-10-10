@@ -102,3 +102,19 @@ def test_approval_ttl_is_configurable_and_positive() -> None:
     assert WorkerSettings.from_env(env).approval_ttl_seconds == 600.0
     with pytest.raises(ConfigError):
         WorkerSettings.from_env({**DATABASE, "FORGE_APPROVAL_TTL_SECONDS": "0"})
+
+
+def test_the_postgres_backend_is_the_default_and_temporal_is_opt_in() -> None:
+    assert WorkerSettings.from_env(DATABASE).temporal is None
+    temporal = WorkerSettings.from_env(
+        {**DATABASE, "FORGE_EXECUTION_BACKEND": "temporal", "FORGE_TEMPORAL_ADDRESS": "t:7233"}
+    ).temporal
+    assert temporal is not None
+    assert (temporal.address, temporal.namespace, temporal.task_queue) == (
+        "t:7233",
+        "default",
+        "forge-tasks",
+    )
+    assert temporal.approval_poll_seconds == 60.0
+    with pytest.raises(ConfigError, match="FORGE_EXECUTION_BACKEND"):
+        ApiSettings.from_env({**API_REQUIRED, "FORGE_EXECUTION_BACKEND": "kafka"})

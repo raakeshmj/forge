@@ -6,7 +6,7 @@ from typing import cast
 
 from fastapi import HTTPException, Request, status
 
-from forge.domain.repositories import Clock, UnitOfWorkFactory
+from forge.domain.repositories import Clock, ExecutionWakeup, UnitOfWorkFactory
 
 
 def uow_factory(request: Request) -> UnitOfWorkFactory:
@@ -15,6 +15,10 @@ def uow_factory(request: Request) -> UnitOfWorkFactory:
 
 def clock(request: Request) -> Clock:
     return cast(Clock, request.app.state.clock)
+
+
+def wakeup(request: Request) -> ExecutionWakeup:
+    return cast(ExecutionWakeup, request.app.state.wakeup)
 
 
 def operator(request: Request) -> str:

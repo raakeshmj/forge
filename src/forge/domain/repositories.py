@@ -4,6 +4,7 @@ All repositories of one `UnitOfWork` share a transaction: it commits when the
 `async with` block exits normally and rolls back on any exception.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
@@ -65,6 +66,39 @@ class LeaseLostError(RuntimeError):
         self.fence = fence
 
 
+class StoreUnavailableError(ConnectionError):
+    """The system of record could not be reached; nothing in the transaction was committed.
+
+    Retryable: long-running loops back off and continue (ADR 0011).
+    """
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(f"the database was unavailable during {operation}")
+        self.operation = operation
+
+
+def outage_delay(consecutive_failures: int, *, base: float = 0.5, cap: float = 30.0) -> float:
+    """Exponential backoff for loops waiting out an infrastructure outage."""
+    return min(cap, base * 2.0 ** max(0, consecutive_failures - 1))
+
+
+class ExecutionWakeup(Protocol):
+    """Publishes "state these executions wait on changed" after it is committed (ADR 0011).
+
+    Best effort: Postgres stays authoritative and drivers poll, so a lost wake-up only
+    delays a resume.
+    """
+
+    async def wake(self, executions: Sequence[Execution]) -> None: ...
+
+
+class NoWakeup:
+    """The Postgres backend: workers poll, nothing to publish."""
+
+    async def wake(self, executions: Sequence[Execution]) -> None:
+        return None
+
+
 class AgentRepository(Protocol):
     async def add(self, agent: Agent, version: AgentVersion) -> None: ...
     async def get(self, agent_id: UUID) -> Agent: ...
@@ -95,8 +129,13 @@ class TaskRepository(Protocol):
     async def get(self, task_id: UUID, *, for_update: bool = False) -> Task: ...
     async def update(self, task: Task) -> Task: ...
     async def list_for_mission(self, mission_id: UUID) -> list[Task]: ...
-    async def lock_next_ready(self) -> Task | None:
-        """Lock the oldest READY task, and its mission, that no other transaction has locked."""
+    async def lock_next_ready(self, task_id: UUID | None = None) -> Task | None:
+        """Lock the oldest READY task (that one, if given), and its mission, that no other
+        transaction has locked."""
+        ...
+
+    async def dispatchable(self, limit: int) -> list[tuple[UUID, int]]:
+        """(task, attempt) pairs that need a driver (ADR 0011)."""
         ...
 
     async def workload(self) -> dict[UUID, int]:
@@ -110,9 +149,10 @@ class ExecutionRepository(Protocol):
         ...
 
     async def reclaim_expired(
-        self, *, worker_id: str, lease_seconds: float
+        self, *, worker_id: str, lease_seconds: float, execution_id: UUID | None = None
     ) -> tuple[Execution, int] | None:
-        """Take over one RUNNING execution whose lease expired: new attempt, new fence."""
+        """Take over one RUNNING execution whose lease expired (that one, if given):
+        new attempt, new fence."""
         ...
 
     async def get(self, execution_id: UUID) -> Execution: ...
@@ -125,9 +165,9 @@ class ExecutionRepository(Protocol):
     async def release(self, execution_id: UUID, *, fence: int) -> None: ...
     async def mission_spend(self, mission_id: UUID) -> int: ...
     async def reclaim_decided(
-        self, *, worker_id: str, lease_seconds: float
+        self, *, worker_id: str, lease_seconds: float, execution_id: UUID | None = None
     ) -> tuple[Execution, int] | None:
-        """Resume one WAITING_APPROVAL execution whose approval is decided or expired."""
+        """Resume one WAITING_APPROVAL execution that may run again (that one, if given)."""
         ...
 
     async def latest_for_task(self, task_id: UUID) -> Execution | None: ...

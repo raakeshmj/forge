@@ -72,10 +72,28 @@ jobs:
           body=$(curl --fail --silent --show-error http://127.0.0.1:18000/health/ready)
           echo "$body"
           test "$(echo "$body" | jq -r .status)" = ready
-      - name: Phase 1 demo (worker SIGKILLed mid-mission, resumed by a replacement)
+      - name: Demos and chaos drill (worker kills, stale worker, PostgreSQL restart)
         run: make e2e
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
+      - if: always()
+        run: make down
+
+  compose-temporal:
+    name: Docker Compose stack on the Temporal backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - run: make install
+      - run: make up-temporal
+      - name: Demos and chaos drill on Temporal
+        run: make e2e-temporal
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose --profile temporal logs
       - if: always()
         run: make down

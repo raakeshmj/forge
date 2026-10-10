@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
-from forge.api.dependencies import clock, operator, uow_factory
+from forge.api.dependencies import clock, operator, uow_factory, wakeup
 from forge.domain.governance import (
     Approval,
     ApprovalStatus,
@@ -199,6 +199,9 @@ async def decide(
         operator=by,
         reason=body.reason,
     )
+    async with uow_factory(request)() as uow:
+        execution = await uow.executions.get(decided.execution_id)
+    await wakeup(request).wake([execution])  # committed first; the signal only hurries it
     return ApprovalView.of(decided)
 
 

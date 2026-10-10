@@ -7,6 +7,11 @@ x-forge-env: &forge-env
   FORGE_REDIS_URL: redis://redis:6379/0
   FORGE_LOG_LEVEL: ${FORGE_LOG_LEVEL:-INFO}
 
+# postgres (default) or temporal; temporal needs `--profile temporal` (ADR 0011).
+x-backend-env: &backend-env
+  FORGE_EXECUTION_BACKEND: ${FORGE_EXECUTION_BACKEND:-postgres}
+  FORGE_TEMPORAL_ADDRESS: temporal:7233
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -48,8 +53,9 @@ services:
 
   api:
     image: forge:dev
+    restart: unless-stopped
     environment:
-      <<: *forge-env
+      <<: [*forge-env, *backend-env]
       # name:token pairs of the humans who approve, write policy, and promote (ADR 0010).
       # Empty by default: no one can, until an operator is configured.
       FORGE_OPERATOR_TOKENS: ${FORGE_OPERATOR_TOKENS:-}
@@ -69,7 +75,10 @@ services:
   worker:
     image: forge:dev
     command: ["python", "-m", "forge.runtime"]
+    # Any number of replicas may run (`--scale worker=3`); a crashed one is restarted.
+    restart: unless-stopped
     environment:
+      <<: *backend-env
       FORGE_DATABASE_URL: postgresql+psycopg://forge:${FORGE_POSTGRES_PASSWORD:-forge}@postgres:5432/forge
       FORGE_LOG_LEVEL: ${FORGE_LOG_LEVEL:-INFO}
       FORGE_WORKER_LEASE_SECONDS: ${FORGE_WORKER_LEASE_SECONDS:-30}
@@ -80,7 +89,33 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+        required: false  # only with `--profile temporal`
     stop_grace_period: 10s
+
+  temporal:
+    # Temporal's single-binary dev server, persisted to a volume. Production runs a real
+    # Temporal cluster; FORGE only needs its address (ADR 0011).
+    image: temporalio/temporal:1.4.1
+    profiles: ["temporal"]
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --db-filename=/home/temporal/temporal.db
+      - --log-level=warn
+    volumes:
+      - temporal-data:/home/temporal
+    ports:
+      - "127.0.0.1:${FORGE_TEMPORAL_HOST_PORT:-17233}:7233"
+      - "127.0.0.1:${FORGE_TEMPORAL_UI_HOST_PORT:-18233}:8233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
 volumes:
   postgres-data:
+  temporal-data:

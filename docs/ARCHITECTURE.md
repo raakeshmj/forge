@@ -398,6 +398,15 @@ Domain logic must not depend directly on Temporal.
 Phase 1 semantics (leases, fencing, record-before-act, idempotency, retry,
 timeouts, cancellation, budgets) are specified in `docs/decisions/0002`.
 
+There are two execution backends (`docs/decisions/0011`), selected by `FORGE_EXECUTION_BACKEND`. They share one contract: the same runner, the same Postgres record, the same fencing and ledger.
+
+| Backend | Dispatch | Durable timers | External events |
+|---|---|---|---|
+| Postgres (default) | Workers claim with `SKIP LOCKED` | Evaluated on every claim | Polled from Postgres |
+| Temporal | One workflow per task attempt drives the execution through a single heartbeating activity | Approval expiry and deadline wake-ups | Approval decisions and cancellations arrive as signals |
+
+Under Temporal, workflow history holds only ids and statuses. Prompts, outputs and tool payloads stay in Postgres. Every long-running loop waits out database and Temporal outages instead of exiting.
+
 ---
 
 # 14. EVENT ARCHITECTURE
@@ -621,6 +630,11 @@ API
 ```
 
 Do not prematurely distribute everything.
+
+Implemented (`docs/decisions/0011`):
+- Any number of worker processes on either backend share one database. Fencing makes a stale or paused worker harmless.
+- Each worker process runs execution, evaluation and learning loops.
+- Separate tool workers are not built: tools run inside the execution step that recorded their intent.
 
 ---
 

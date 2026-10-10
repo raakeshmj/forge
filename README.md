@@ -2,7 +2,7 @@
 
 FORGE is an autonomous agent operations and continuous-learning platform. Start with [`CLAUDE.md`](CLAUDE.md) and [`docs/`](docs/). Architecture decisions are recorded in [`docs/decisions/`](docs/decisions/).
 
-**Status:** Phases 0-8 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**Status:** Phases 0-9 are implemented: durable multi-agent orchestration (planned task graphs, capability routing, parallel fan-out/fan-in, retries, shared budgets) over a provider-aware inference layer with prompt caching and a secure tool runtime (registry, MCP, remote API tools), with structured evaluation of every mission, versioned benchmarks, capability-aware routing on measured competency, controlled learning (validated, reversible skill promotion), and governance (policies, durable human approval of high-risk calls, append-only audit, per-agent credential grants), on either of two durable execution backends (PostgreSQL, or Temporal) that survive worker crashes, stale workers, and database outages without duplicating side effects. See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ## Requirements
 
@@ -16,7 +16,8 @@ make install           # create .venv from uv.lock
 make check             # lint, types, import boundaries, unit tests
 make up                # build and start Postgres, Redis, migrations, API; waits until healthy
 make test-integration  # integration, recovery, and migration tests against the running stack
-make e2e               # demos: worker SIGKILL + resume, planned fan-out, approval across a worker kill
+make e2e               # demos + chaos drill: worker kills, stale worker, PostgreSQL restart
+make up-temporal && make e2e-temporal  # the same, on the Temporal backend
 curl localhost:18000/health/ready
 make down              # stop and delete volumes
 ```
@@ -112,6 +113,24 @@ an agent `["metrics.read", "deployment.rollback"]` and the mission
 A waiting execution holds no worker. Approvals expire after
 `FORGE_APPROVAL_TTL_SECONDS` (default 86400).
 
+## Durability and Temporal
+
+Two execution backends share one contract
+([`docs/decisions/0011`](docs/decisions/0011-temporal-backend-and-distributed-durability.md)).
+- **PostgreSQL (default):** workers claim work directly.
+- **Temporal:** `FORGE_EXECUTION_BACKEND=temporal`, started with `make up-temporal`. It runs one workflow per task attempt, with durable timers for approval expiry and wake-up signals for decisions and cancellations. The Temporal UI is at `127.0.0.1:18233`.
+
+On both backends:
+- Run as many workers as you like (`docker compose up -d --scale worker=3`).
+- A killed or frozen worker's lease is taken over.
+- A database or Temporal outage is waited out.
+- A non-idempotent tool interrupted mid-call is never repeated.
+
+Tests:
+- `tests/integration/test_process_crashes.py` SIGKILLs real worker processes on both backends.
+- `tests/integration/test_chaos.py` is a seeded chaos suite.
+- `tests/e2e/test_phase9_chaos.py` runs the chaos drill against the Docker stack.
+
 ## Local services
 
 | Service    | Host address      | Override                   |
@@ -119,6 +138,7 @@ A waiting execution holds no worker. Approvals expire after
 | PostgreSQL | `127.0.0.1:15432` | `FORGE_POSTGRES_HOST_PORT` |
 | Redis      | `127.0.0.1:16379` | `FORGE_REDIS_HOST_PORT`    |
 | API        | `127.0.0.1:18000` | `FORGE_API_HOST_PORT`      |
+| Temporal   | `127.0.0.1:17233` (UI `18233`) | `FORGE_TEMPORAL_HOST_PORT` (profile `temporal`) |
 
 The credentials in `compose.yaml` are development defaults only.
 
@@ -136,6 +156,9 @@ The credentials in `compose.yaml` are development defaults only.
 | `FORGE_WORKER_LEASE_SECONDS` / `FORGE_WORKER_POLL_SECONDS` | no | `30` / `1` |
 | `FORGE_OPERATOR_TOKENS` (API) | no | none: no one can approve, write policy, pin, or promote |
 | `FORGE_APPROVAL_TTL_SECONDS` (worker) | no | `86400` |
+| `FORGE_EXECUTION_BACKEND` (API and worker) | no | `postgres` (or `temporal`) |
+| `FORGE_TEMPORAL_ADDRESS` / `_NAMESPACE` / `_TASK_QUEUE` | with Temporal | `127.0.0.1:7233` / `default` / `forge-tasks` |
+| `FORGE_TEMPORAL_APPROVAL_POLL_SECONDS` | no | `60` (a parked task re-checks Postgres at least this often) |
 
 The worker needs only `FORGE_DATABASE_URL`. Run the processes outside Docker with
 `uv run python -m forge.api` and `uv run python -m forge.runtime`.

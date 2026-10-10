@@ -18,7 +18,14 @@ from forge.api import (
 )
 from forge.api.correlation import correlation_middleware
 from forge.domain.common import DomainError
-from forge.domain.repositories import AlreadyExistsError, Clock, NotFoundError, UnitOfWorkFactory
+from forge.domain.repositories import (
+    AlreadyExistsError,
+    Clock,
+    ExecutionWakeup,
+    NotFoundError,
+    NoWakeup,
+    UnitOfWorkFactory,
+)
 from forge.domain.skill import LearningError
 from forge.evaluation.service import MissionNotFinishedError
 from forge.health import DependencyCheck
@@ -34,6 +41,7 @@ def create_app(
     readiness_timeout_seconds: float,
     on_shutdown: Sequence[Callable[[], Awaitable[None]]] = (),
     operator_tokens: Mapping[str, str] | None = None,
+    wakeup: ExecutionWakeup | None = None,
 ) -> FastAPI:
     """Build the app from already-constructed dependencies; `on_shutdown` releases them."""
 
@@ -49,6 +57,7 @@ def create_app(
     app.state.readiness_checks = tuple(readiness_checks)
     app.state.readiness_timeout_seconds = readiness_timeout_seconds
     app.state.operator_tokens = dict(operator_tokens or {})  # none configured: nobody is one
+    app.state.wakeup = wakeup or NoWakeup()  # external events for the execution backend
     app.middleware("http")(correlation_middleware)
     app.include_router(health.router)
     app.include_router(agents.router)

@@ -12,8 +12,8 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import timedelta
-from uuid import uuid4
+from datetime import datetime, timedelta
+from uuid import UUID, uuid4
 
 from forge.domain.agent import AgentVersion, ModelRef
 from forge.domain.checkpoint import STATE_VERSION, AgentState, Checkpoint
@@ -103,31 +103,65 @@ class Claim:
 
 
 async def claim_next(runtime: Runtime) -> Claim | None:
-    """Take over an execution whose lease expired, else start the oldest READY task."""
+    """Resume a parked execution, take over an expired lease, else start the oldest READY task."""
     now = runtime.clock.now()
+    await expire_approvals(runtime, now)
+    return (
+        await resume_parked(runtime, now)
+        or await take_over_expired(runtime)
+        or await start_ready(runtime, now)
+    )
+
+
+async def expire_approvals(runtime: Runtime, now: datetime) -> None:
+    """Durable timer: close overdue approvals, evaluated before every claim (ADR 0010)."""
     async with runtime.uow_factory() as uow:
-        await approvals.expire_due(uow, now)  # durable timer, evaluated on every claim
+        await approvals.expire_due(uow, now)
+
+
+async def resume_parked(
+    runtime: Runtime, now: datetime, execution_id: UUID | None = None
+) -> Claim | None:
+    """Resume a WAITING_APPROVAL execution (that one, if given) that may run again."""
     async with runtime.uow_factory() as uow:
         resumed = await uow.executions.reclaim_decided(
-            worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
+            worker_id=runtime.worker_id,
+            lease_seconds=runtime.lease_seconds,
+            execution_id=execution_id,
         )
-        if resumed is not None:
-            execution, fence = resumed
-            await missions.unblock_task(uow, execution.task_id, now)
-            mission = await uow.missions.get(execution.mission_id)
-            await _append(uow, mission, _started(execution, runtime.worker_id))
-            return Claim(execution, fence)
+        if resumed is None:
+            return None
+        execution, fence = resumed
+        await missions.unblock_task(uow, execution.task_id, now)
+        mission = await uow.missions.get(execution.mission_id)
+        await _append(uow, mission, _started(execution, runtime.worker_id))
+    return Claim(execution, fence)
+
+
+async def take_over_expired(runtime: Runtime, execution_id: UUID | None = None) -> Claim | None:
+    """Recover a RUNNING execution (that one, if given) whose lease expired: a new attempt."""
     async with runtime.uow_factory() as uow:
         reclaimed = await uow.executions.reclaim_expired(
-            worker_id=runtime.worker_id, lease_seconds=runtime.lease_seconds
+            worker_id=runtime.worker_id,
+            lease_seconds=runtime.lease_seconds,
+            execution_id=execution_id,
         )
-        if reclaimed is not None:
-            execution, fence = reclaimed
-            mission = await uow.missions.get(execution.mission_id)
-            await _append(uow, mission, _started(execution, runtime.worker_id))
-            return Claim(execution, fence)
+        if reclaimed is None:
+            return None
+        execution, fence = reclaimed
+        mission = await uow.missions.get(execution.mission_id)
+        await _append(uow, mission, _started(execution, runtime.worker_id))
+    return Claim(execution, fence)
 
-        task = await uow.tasks.lock_next_ready()
+
+async def start_ready(runtime: Runtime, now: datetime, task_id: UUID | None = None) -> Claim | None:
+    """Create the execution of the oldest READY task (that one, if given).
+
+    None when nothing could be claimed, or when no model can serve the task (the
+    execution is then created and failed at once).
+    """
+    async with runtime.uow_factory() as uow:
+        task = await uow.tasks.lock_next_ready(task_id)
         if task is None:
             return None
         if task.agent_id is None:  # READY tasks are always routed (database constraint)

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 _LOG_LEVELS = frozenset(logging.getLevelNamesMapping())
 OTEL_EXPORTERS = frozenset({"none", "console", "otlp"})
+EXECUTION_BACKENDS = frozenset({"postgres", "temporal"})
 
 
 class ConfigError(ValueError):
@@ -30,6 +31,7 @@ class ApiSettings:
     redis_url: str = field(repr=False)
     # token -> operator name; humans who may approve, write policy, promote (ADR 0010)
     operator_tokens: Mapping[str, str] = field(default_factory=dict, repr=False)
+    temporal: "TemporalSettings | None" = None  # set when the backend is Temporal (ADR 0011)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ApiSettings":
@@ -47,6 +49,7 @@ class ApiSettings:
             database_url=reader.required("FORGE_DATABASE_URL"),
             redis_url=reader.required("FORGE_REDIS_URL"),
             operator_tokens=reader.operator_tokens(),
+            temporal=reader.temporal(),
         )
         reader.raise_if_invalid()
         return settings
@@ -65,6 +68,7 @@ class WorkerSettings:
     concurrency: int = 1  # parallel claim loops in this process (ADR 0006)
     learning_auto: bool = False  # start learning cycles on detected gaps (ADR 0009)
     approval_ttl_seconds: float = 86_400.0  # time a human has to decide (ADR 0010)
+    temporal: "TemporalSettings | None" = None  # set when the backend is Temporal (ADR 0011)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -88,9 +92,18 @@ class WorkerSettings:
             concurrency=reader.integer("FORGE_WORKER_CONCURRENCY", default=1),
             learning_auto=reader.text("FORGE_LEARNING_AUTO", default="false").lower() == "true",
             approval_ttl_seconds=reader.positive("FORGE_APPROVAL_TTL_SECONDS", 86_400.0),
+            temporal=reader.temporal(),
         )
         reader.raise_if_invalid()
         return settings
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalSettings:
+    address: str
+    namespace: str
+    task_queue: str
+    approval_poll_seconds: float  # how often a parked task re-checks Postgres
 
 
 class _Reader:
@@ -169,6 +182,23 @@ class _Reader:
                 continue
             tokens[token] = name
         return tokens
+
+    def temporal(self) -> TemporalSettings | None:
+        """`FORGE_EXECUTION_BACKEND=temporal` selects Temporal; the default is Postgres."""
+        backend = self._source.get("FORGE_EXECUTION_BACKEND", "postgres").lower()
+        if backend not in EXECUTION_BACKENDS:
+            self.errors.append(
+                f"FORGE_EXECUTION_BACKEND must be one of {sorted(EXECUTION_BACKENDS)}, "
+                f"got {backend!r}"
+            )
+        if backend != "temporal":
+            return None
+        return TemporalSettings(
+            address=self.text("FORGE_TEMPORAL_ADDRESS", default="127.0.0.1:7233"),
+            namespace=self.text("FORGE_TEMPORAL_NAMESPACE", default="default"),
+            task_queue=self.text("FORGE_TEMPORAL_TASK_QUEUE", default="forge-tasks"),
+            approval_poll_seconds=self.positive("FORGE_TEMPORAL_APPROVAL_POLL_SECONDS", 60.0),
+        )
 
     def raise_if_invalid(self) -> None:
         if self.errors:

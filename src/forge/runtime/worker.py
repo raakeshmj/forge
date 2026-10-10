@@ -3,9 +3,10 @@
 import asyncio
 import contextlib
 import logging
+import time
 
 from forge.domain.execution import Execution
-from forge.domain.repositories import LeaseLostError
+from forge.domain.repositories import LeaseLostError, StoreUnavailableError, outage_delay
 from forge.runtime.agent_loop import Claim, ExecutionRunner, Runtime, claim_next
 
 _log = logging.getLogger(__name__)
@@ -26,11 +27,21 @@ class Worker:
                 group.create_task(self._claim_loop(stop))
 
     async def _claim_loop(self, stop: asyncio.Event) -> None:
+        outages = 0
         while not stop.is_set():
-            claim = await claim_next(self._rt)
+            try:
+                claim = await claim_next(self._rt)
+                outages = 0
+            except StoreUnavailableError as exc:  # recovery: wait out the outage (ADR 0011)
+                outages += 1
+                _log.warning(
+                    "database unavailable; claiming backs off",
+                    extra={"operation": exc.operation, "attempt": outages, "retryable": True},
+                )
+                await _sleep_unless_stopped(stop, outage_delay(outages))
+                continue
             if claim is None:
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(stop.wait(), timeout=self._poll_interval)
+                await _sleep_unless_stopped(stop, self._poll_interval)
                 continue
             await self.run_claim(claim)
 
@@ -69,11 +80,22 @@ class Worker:
         lost: asyncio.Event,
     ) -> None:
         interval = self._rt.lease_seconds / 3
+        renewed_at = time.monotonic()
         while True:
             await asyncio.sleep(interval)
-            async with self._rt.uow_factory() as uow:
-                held = await uow.executions.renew(
-                    claim.execution.id, fence=claim.fence, lease_seconds=self._rt.lease_seconds
+            try:
+                async with self._rt.uow_factory() as uow:
+                    held = await uow.executions.renew(
+                        claim.execution.id, fence=claim.fence, lease_seconds=self._rt.lease_seconds
+                    )
+                renewed_at = time.monotonic()
+            except StoreUnavailableError:
+                # Unknown: keep trying while the last renewal still covers us; past that,
+                # another worker may legitimately take over, so stop (ADR 0011).
+                held = time.monotonic() - renewed_at < self._rt.lease_seconds - interval
+                _log.warning(
+                    "lease renewal failed: database unavailable",
+                    extra={"execution_id": str(claim.execution.id), "retryable": True},
                 )
             if not held and not runner.finished:
                 lost.set()
@@ -82,8 +104,19 @@ class Worker:
 
     async def _release(self, claim: Claim) -> None:
         """Let another worker resume immediately instead of waiting for the lease to expire."""
-        async with self._rt.uow_factory() as uow:
-            await uow.executions.release(claim.execution.id, fence=claim.fence)
+        try:
+            async with self._rt.uow_factory() as uow:
+                await uow.executions.release(claim.execution.id, fence=claim.fence)
+        except StoreUnavailableError:  # recovery: the lease simply expires instead
+            _log.warning(
+                "lease release skipped: database unavailable",
+                extra={"execution_id": str(claim.execution.id), "retryable": True},
+            )
+
+
+async def _sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
 
 
 def _being_cancelled() -> bool:

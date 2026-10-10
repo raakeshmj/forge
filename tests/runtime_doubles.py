@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -14,11 +15,13 @@ from forge.domain.common import JSONValue
 from forge.domain.cost import ModelPrice, Usage
 from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.model import ModelRequest, ModelResponse, TextBlock, ToolUseBlock
+from forge.domain.repositories import StoreUnavailableError
 from forge.domain.risk import RiskLevel
 from forge.domain.tool import Idempotency, ToolDefinition, ToolResult
 from forge.inference.client import ModelCallError, ModelClient
 from forge.inference.profiles import CachingMode, ModelProfile
 from forge.infrastructure.clock import SystemClock
+from forge.infrastructure.store import PostgresUnitOfWork
 from forge.orchestration.agents import register_agent
 from forge.orchestration.missions import MissionRequest, submit_mission
 from forge.runtime.agent_loop import Runtime
@@ -255,3 +258,35 @@ class OracleInvestigator:
         if len(request.messages) == 1:
             return tool_call(service=service, metric="latency_p95_ms")
         return answer(self.ANSWERS[service])
+
+
+class Outage:
+    """A switchable database outage in front of a real unit-of-work factory."""
+
+    def __init__(self, uow: UowFactory) -> None:
+        self._uow = uow
+        self.down = False
+        self.refused = 0
+
+    def __call__(self) -> "_MaybeDown":
+        return _MaybeDown(self, self._uow())
+
+
+class _MaybeDown:
+    def __init__(self, outage: Outage, inner: PostgresUnitOfWork) -> None:
+        self._outage = outage
+        self._inner = inner
+
+    async def __aenter__(self) -> PostgresUnitOfWork:
+        if self._outage.down:
+            self._outage.refused += 1
+            raise StoreUnavailableError("connect")
+        return await self._inner.__aenter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self._inner.__aexit__(exc_type, exc, tb)

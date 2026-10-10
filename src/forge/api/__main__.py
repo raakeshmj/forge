@@ -6,9 +6,11 @@ import uvicorn
 
 from forge.api.app import create_app
 from forge.config import ApiSettings
+from forge.domain.repositories import ExecutionWakeup, NoWakeup
 from forge.infrastructure import postgres, redis
 from forge.infrastructure.clock import SystemClock
 from forge.infrastructure.store import PostgresUnitOfWork
+from forge.infrastructure.temporal.wakeup import TemporalWakeup
 from forge.observability.logs import configure_logging
 from forge.observability.tracing import configure_tracing
 
@@ -30,6 +32,7 @@ def main() -> None:
         readiness_timeout_seconds=settings.readiness_timeout_seconds,
         on_shutdown=shutdown,
         operator_tokens=settings.operator_tokens,
+        wakeup=_wakeup(settings),
     )
 
     uvicorn.run(
@@ -39,6 +42,12 @@ def main() -> None:
         log_config=None,  # keep the JSON handler installed by configure_logging
         access_log=False,  # requests are logged by the correlation middleware instead
     )
+
+
+def _wakeup(settings: ApiSettings) -> ExecutionWakeup:
+    if settings.temporal is None:
+        return NoWakeup()
+    return TemporalWakeup(settings.temporal.address, settings.temporal.namespace)
 
 
 def _async(release: Callable[[], None]) -> Callable[[], Awaitable[None]]:

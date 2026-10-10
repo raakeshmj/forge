@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Row, and_, delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
 
 from forge.domain.agent import Agent, AgentVersion, ModelRef
@@ -53,6 +53,7 @@ from forge.domain.repositories import (
     ConcurrentUpdateError,
     LeaseLostError,
     NotFoundError,
+    StoreUnavailableError,
 )
 from forge.domain.risk import RiskLevel
 from forge.domain.skill import CycleStatus, LearningCycle, SkillRef, SkillStatus, SkillVersion
@@ -79,8 +80,13 @@ class PostgresUnitOfWork:
         self._engine = engine
 
     async def __aenter__(self) -> Self:
-        self._connection: AsyncConnection = await self._engine.connect()
-        self._transaction: AsyncTransaction = await self._connection.begin()
+        try:
+            self._connection: AsyncConnection = await self._engine.connect()
+            self._transaction: AsyncTransaction = await self._connection.begin()
+        except _CONNECTION_ERRORS as exc:
+            if _is_connection_failure(exc):
+                raise StoreUnavailableError("connect") from exc
+            raise
         connection = self._connection
         self.agents = _Agents(connection)
         self.missions = _Missions(connection)
@@ -110,12 +116,33 @@ class PostgresUnitOfWork:
         tb: TracebackType | None,
     ) -> None:
         try:
-            if exc_type is None:
-                await self._transaction.commit()
-            else:
-                await self._transaction.rollback()
-        finally:
-            await self._connection.close()
+            try:
+                if exc_type is None:
+                    await self._transaction.commit()
+                else:
+                    await self._transaction.rollback()
+            finally:
+                await self._connection.close()
+        except _CONNECTION_ERRORS as failure:
+            # A dead connection cannot commit: nothing was written (or a commit's fate is
+            # unknown, which fencing and the intent ledger already handle, ADR 0002).
+            if _is_connection_failure(failure):
+                raise StoreUnavailableError("commit" if exc_type is None else "rollback") from (
+                    exc or failure
+                )
+            raise
+        if exc is not None and _is_connection_failure(exc):
+            raise StoreUnavailableError("query") from exc
+
+
+_CONNECTION_ERRORS = (OperationalError, InterfaceError, DBAPIError, OSError)
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Connection-level failures only; constraint violations and bugs keep their type."""
+    if isinstance(exc, OperationalError | InterfaceError | OSError):
+        return True
+    return isinstance(exc, DBAPIError) and exc.connection_invalidated
 
 
 class _Repository:
@@ -382,20 +409,37 @@ class _Tasks(_Repository):
         )
         return [_task(row) for row in rows]
 
-    async def lock_next_ready(self) -> Task | None:
+    async def lock_next_ready(self, task_id: UUID | None = None) -> Task | None:
         # Lock the mission with the task, mission first in intent: cancellation locks the
         # mission then its tasks, so a claim must never wait on a mission lock (deadlock).
-        row = (
-            await self._connection.execute(
-                select(t.tasks)
-                .join(t.missions, t.missions.c.id == t.tasks.c.mission_id)
-                .where(t.tasks.c.status == TaskStatus.READY.value, t.tasks.c.agent_id.is_not(None))
-                .order_by(t.tasks.c.created_at)
-                .limit(1)
-                .with_for_update(skip_locked=True, of=[t.tasks, t.missions])
-            )
-        ).first()
+        statement = (
+            select(t.tasks)
+            .join(t.missions, t.missions.c.id == t.tasks.c.mission_id)
+            .where(t.tasks.c.status == TaskStatus.READY.value, t.tasks.c.agent_id.is_not(None))
+            .order_by(t.tasks.c.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True, of=[t.tasks, t.missions])
+        )
+        if task_id is not None:
+            statement = statement.where(t.tasks.c.id == task_id)
+        row = (await self._connection.execute(statement)).first()
         return None if row is None else _task(row)
+
+    async def dispatchable(self, limit: int) -> list[tuple[UUID, int]]:
+        """(task, attempt) pairs needing a driver: READY tasks, executions whose lease
+        expired, and parked executions that can resume (ADR 0011)."""
+        ready = select(t.tasks.c.id, t.tasks.c.attempts + 1).where(
+            t.tasks.c.status == TaskStatus.READY.value, t.tasks.c.agent_id.is_not(None)
+        )
+        stalled = select(t.executions.c.task_id, t.executions.c.task_attempt).where(
+            (
+                (t.executions.c.status == ExecutionStatus.RUNNING.value)
+                & (t.executions.c.lease_expires_at < func.now())
+            )
+            | ((t.executions.c.status == ExecutionStatus.WAITING_APPROVAL.value) & _resumable())
+        )
+        rows = await self._connection.execute(ready.union_all(stalled).limit(limit))
+        return [(row[0], int(row[1])) for row in rows]
 
     async def workload(self) -> dict[UUID, int]:
         rows = await self._connection.execute(
@@ -461,15 +505,16 @@ class _Executions(_Repository):
         return fence
 
     async def reclaim_expired(
-        self, *, worker_id: str, lease_seconds: float
+        self, *, worker_id: str, lease_seconds: float, execution_id: UUID | None = None
     ) -> tuple[Execution, int] | None:
+        candidates = select(t.executions.c.id).where(
+            t.executions.c.status == ExecutionStatus.RUNNING.value,
+            t.executions.c.lease_expires_at < func.now(),
+        )
+        if execution_id is not None:
+            candidates = candidates.where(t.executions.c.id == execution_id)
         expired = (
-            select(t.executions.c.id)
-            .where(
-                t.executions.c.status == ExecutionStatus.RUNNING.value,
-                t.executions.c.lease_expires_at < func.now(),
-            )
-            .order_by(t.executions.c.lease_expires_at)
+            candidates.order_by(t.executions.c.lease_expires_at)
             .limit(1)
             .with_for_update(skip_locked=True)
             .scalar_subquery()
@@ -550,30 +595,15 @@ class _Executions(_Repository):
         return None if row is None else _execution(row)
 
     async def reclaim_decided(
-        self, *, worker_id: str, lease_seconds: float
+        self, *, worker_id: str, lease_seconds: float, execution_id: UUID | None = None
     ) -> tuple[Execution, int] | None:
+        candidates = select(t.executions.c.id).where(
+            t.executions.c.status == ExecutionStatus.WAITING_APPROVAL.value, _resumable()
+        )
+        if execution_id is not None:
+            candidates = candidates.where(t.executions.c.id == execution_id)
         decided = (
-            select(t.executions.c.id)
-            .where(
-                t.executions.c.status == ExecutionStatus.WAITING_APPROVAL.value,
-                select(t.approvals.c.id)
-                .where(
-                    t.approvals.c.execution_id == t.executions.c.id,
-                    t.approvals.c.status != "PENDING",  # expiry is closed by expire_due first
-                )
-                .exists()
-                | select(t.missions.c.id)
-                .where(
-                    t.missions.c.id == t.executions.c.mission_id,
-                    t.missions.c.status.in_(["COMPLETED", "FAILED", "CANCELLED"])
-                    | (t.missions.c.deadline <= func.now()),
-                )
-                .exists()
-                | select(t.tasks.c.id)
-                .where(t.tasks.c.id == t.executions.c.task_id, t.tasks.c.status == "CANCELLED")
-                .exists(),
-            )
-            .order_by(t.executions.c.started_at)
+            candidates.order_by(t.executions.c.started_at)
             .limit(1)
             .with_for_update(skip_locked=True)
             .scalar_subquery()
@@ -659,6 +689,30 @@ def _execution(row: Row[Any]) -> Execution:
 
 
 # --- Checkpoints -----------------------------------------------------------------------
+
+
+def _resumable() -> Any:
+    """A parked execution may run again: its approval was decided or expired (expire_due
+    closes overdue ones first), or its mission ended, passed its deadline, or its task was
+    cancelled (ADR 0010, ADR 0011)."""
+    return (
+        select(t.approvals.c.id)
+        .where(
+            t.approvals.c.execution_id == t.executions.c.id,
+            t.approvals.c.status != "PENDING",  # expiry is closed by expire_due first
+        )
+        .exists()
+        | select(t.missions.c.id)
+        .where(
+            t.missions.c.id == t.executions.c.mission_id,
+            t.missions.c.status.in_(["COMPLETED", "FAILED", "CANCELLED"])
+            | (t.missions.c.deadline <= func.now()),
+        )
+        .exists()
+        | select(t.tasks.c.id)
+        .where(t.tasks.c.id == t.executions.c.task_id, t.tasks.c.status == "CANCELLED")
+        .exists()
+    )
 
 
 class _Checkpoints(_Repository):

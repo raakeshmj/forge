@@ -287,6 +287,8 @@ High-risk tool calls require durable human approval.
 
 # PHASE 9 — PRODUCTION DURABILITY
 
+Status: implemented. Decisions: `docs/decisions/0011`.
+
 ## Objective
 
 Support distributed durable execution.

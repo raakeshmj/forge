@@ -62,6 +62,8 @@ LLM output is nondeterministic, so re-calling a model on resume can produce a di
 
 **Temporal mapping (Phase 9).** The agent loop is the deterministic workflow, and model and tool calls are its activities. Checkpoints correspond to recorded activity results. The ledger and idempotency keys carry over unchanged.
 
+*Superseded by `docs/decisions/0011`.* Temporal drives claims of the unchanged runner instead. Postgres checkpoints stay the only record of model and tool results, and those payloads never enter Temporal history.
+
 ## Alternatives considered
 
 - **Redis streams for dispatch:** this creates a second source of truth and a dual-write between Postgres and Redis. `SKIP LOCKED` is enough at Phase 1 scale.

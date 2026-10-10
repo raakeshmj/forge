@@ -4,8 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 
-from forge.api.dependencies import clock, uow_factory
+from forge.api.dependencies import clock, uow_factory, wakeup
 from forge.api.schemas import EventView, MissionCreate, MissionView
+from forge.domain.execution import ExecutionStatus
 from forge.domain.mission import Budget, ExecutionPolicy, RiskPolicy
 from forge.domain.plan import PlannedTask
 from forge.observability.logs import correlation_id
@@ -74,12 +75,14 @@ async def cancel(mission_id: UUID, request: Request) -> MissionView:
     async with uow_factory(request)() as uow:
         spent = await uow.executions.mission_spend(mission.id)
     record_finished_mission(mission, tasks, cost_micro_usd=spent)
+    await _wake_unfinished(request, mission_id)
     return await _view(request, mission_id)
 
 
 @router.post("/{mission_id}/tasks/{task_id}/cancel")
 async def cancel_one_task(mission_id: UUID, task_id: UUID, request: Request) -> MissionView:
     mission, tasks = await cancel_task(uow_factory(request), clock(request), mission_id, task_id)
+    await _wake_unfinished(request, mission_id)
     if mission.status.is_terminal:
         async with uow_factory(request)() as uow:
             spent = await uow.executions.mission_spend(mission.id)
@@ -100,3 +103,11 @@ async def _view(request: Request, mission_id: UUID) -> MissionView:
         tasks = await uow.tasks.list_for_mission(mission_id)
         executions = await uow.executions.list_for_mission(mission_id)
     return MissionView.of(mission, tasks, executions)
+
+
+async def _wake_unfinished(request: Request, mission_id: UUID) -> None:
+    """Parked or running executions should notice the cancellation now (ADR 0011)."""
+    async with uow_factory(request)() as uow:
+        executions = await uow.executions.list_for_mission(mission_id)
+    live = (ExecutionStatus.RUNNING, ExecutionStatus.WAITING_APPROVAL)
+    await wakeup(request).wake([e for e in executions if e.status in live])

@@ -6,7 +6,12 @@ import logging
 from collections.abc import Awaitable
 from uuid import UUID
 
-from forge.domain.repositories import Clock, UnitOfWorkFactory
+from forge.domain.repositories import (
+    Clock,
+    StoreUnavailableError,
+    UnitOfWorkFactory,
+    outage_delay,
+)
 from forge.domain.skill import CycleStatus
 from forge.learning import analysis, cycle, generation
 
@@ -31,10 +36,21 @@ async def run_until(
     generator: generation.SkillGenerator,
     auto_detect: bool,
 ) -> None:
+    outages = 0
     while not stop.is_set():
-        await step(uow_factory, clock, generator=generator, auto_detect=auto_detect)
+        delay = poll_interval_seconds
+        try:
+            await step(uow_factory, clock, generator=generator, auto_detect=auto_detect)
+            outages = 0
+        except StoreUnavailableError as exc:  # recovery: wait out the outage (ADR 0011)
+            outages += 1
+            delay = outage_delay(outages)
+            _log.warning(
+                "database unavailable; learning backs off",
+                extra={"operation": exc.operation, "attempt": outages, "retryable": True},
+            )
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=poll_interval_seconds)
+            await asyncio.wait_for(stop.wait(), timeout=delay)
 
 
 async def step(

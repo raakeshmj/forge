@@ -4,7 +4,12 @@ import asyncio
 import contextlib
 import logging
 
-from forge.domain.repositories import Clock, UnitOfWorkFactory
+from forge.domain.repositories import (
+    Clock,
+    StoreUnavailableError,
+    UnitOfWorkFactory,
+    outage_delay,
+)
 from forge.evaluation.judge import JudgeEvaluator
 from forge.evaluation.service import evaluate_mission
 
@@ -20,11 +25,21 @@ async def run_until(
     poll_interval_seconds: float,
     judge: JudgeEvaluator | None = None,
 ) -> None:
+    outages = 0
     while not stop.is_set():
-        evaluated = await evaluate_pending(uow_factory, clock, judge=judge)
+        try:
+            evaluated = await evaluate_pending(uow_factory, clock, judge=judge)
+            outages, delay = 0, poll_interval_seconds
+        except StoreUnavailableError as exc:  # recovery: wait out the outage (ADR 0011)
+            outages += 1
+            evaluated, delay = 0, outage_delay(outages)
+            _log.warning(
+                "database unavailable; evaluation backs off",
+                extra={"operation": exc.operation, "attempt": outages, "retryable": True},
+            )
         if not evaluated:
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=poll_interval_seconds)
+                await asyncio.wait_for(stop.wait(), timeout=delay)
 
 
 async def evaluate_pending(
