@@ -119,6 +119,7 @@ def test_a_user_observes_a_mission_from_planning_through_evaluation(
     assert "p95" in text_of(ui.get("/observability"))
     assert "By agent" in text_of(ui.get("/costs"))
     assert "incident-investigation" in text_of(ui.get("/benchmarks"))
+    shows(text_of(ui.get("/missions/new")), "New mission", "Launch mission", "Objective")
     for path in ("/agents", "/skills", "/policies", "/approvals"):
         text_of(ui.get(path))
     assert ui.get(f"/missions/{'0' * 8}-0000-0000-0000-000000000000").status_code == 404

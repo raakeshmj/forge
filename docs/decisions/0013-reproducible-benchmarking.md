@@ -55,7 +55,7 @@ The two chaos arms are separate because they answer different questions. A re-ex
 - Arms run with concurrency 1 by default.
 - Each chaos arm draws from its own `Random(seed + offset)`.
 - Two runs with the same seed produce identical results except for wall-clock latency and timestamps. An integration test asserts this.
-- Raising `--concurrency` trades this guarantee for speed.
+- Raising `Config.concurrency` (a harness setting, not a CLI flag) trades this guarantee for speed.
 
 **Metrics.** These are computed from the system of record after each arm:
 

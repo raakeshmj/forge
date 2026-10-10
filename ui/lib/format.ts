@@ -3,8 +3,10 @@
 export function usd(microUsd: number): string {
   const dollars = microUsd / 1_000_000;
   if (dollars === 0) return "$0";
-  if (Math.abs(dollars) < 0.01) return `$${dollars.toFixed(6)}`;
-  return `$${dollars.toFixed(dollars < 100 ? 4 : 2)}`;
+  const sign = dollars < 0 ? "-" : "";
+  const size = Math.abs(dollars);
+  if (size < 0.01) return `${sign}$${size.toFixed(6)}`;
+  return `${sign}$${size.toFixed(size < 100 ? 4 : 2)}`;
 }
 
 export function num(value: number): string {

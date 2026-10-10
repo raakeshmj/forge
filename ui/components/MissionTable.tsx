@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { Status } from "@/components/ui";
-import { num, usd, when } from "@/lib/format";
+import { num, short, usd, when } from "@/lib/format";
 import type { MissionSummary } from "@/lib/types";
 
 export function MissionTable({ missions }: { missions: MissionSummary[] }) {
@@ -22,6 +22,7 @@ export function MissionTable({ missions }: { missions: MissionSummary[] }) {
           <tr key={m.id}>
             <td>
               <Link href={`/missions/${m.id}`}>{m.objective.slice(0, 90)}</Link>
+              <span className="id-chip">{short(m.id)}</span>
             </td>
             <td>
               <Status value={m.status} />

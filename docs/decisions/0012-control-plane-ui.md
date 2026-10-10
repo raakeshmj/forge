@@ -41,11 +41,19 @@ The plan lists thirteen pages, and the API already serves most of the underlying
 **Live events.**
 - `GET /missions/{id}/events/stream` is a Server-Sent Events stream. Each poll re-reads the mission's events and sends the ones not yet sent, identified by event id.
 - The events table has no global commit-ordered cursor; timestamps from concurrent transactions can commit out of order. Re-reading by mission therefore never skips an event.
-- The stream closes once the mission is terminal.
+- The stream closes once the mission is terminal and its evaluation is recorded. Workers evaluate a mission after it finishes, so closing at the terminal status alone could drop the evaluation events.
+- On milestone events (plan, task and mission outcomes, approvals, evaluation) the mission page re-renders its server components, so status, tasks, results and scores update while the mission runs.
 - The browser reaches the API only through the UI server's `/api/forge/*` proxy, so no CORS is needed and the API stays bound to loopback.
 
+**Writes.**
+- Submitting a mission and registering the demo agent use `POST /missions` and `POST /agents`. The API accepts these from any client (ADR 0010), and a server action sends exactly what `curl` would, with no credentials.
+  - Input is validated server-side first.
+  - The budget is capped at $10 as a typo guard.
+  - The risk ceiling is LOW, MEDIUM or HIGH. HIGH-risk calls still wait for an operator's approval.
+- The browser-facing proxy stays GET-only.
+
 **Operator actions.**
-- The UI acts only through the same operator-token endpoints as any client (ADR 0010).
+- Operator actions go through the same operator-token endpoints as any client (ADR 0010).
 - An operator enters their token in the approval form. A server action forwards it once as a bearer header.
 - The token is never stored in a cookie, local storage, logs or the page.
 - The UI server holds no credentials of its own.
@@ -56,6 +64,14 @@ The plan lists thirteen pages, and the API already serves most of the underlying
 - approval requests, which must show the exact action to the human deciding it
 
 It shows no prompts, checkpoint contents or tool results.
+
+**Visual design.**
+- The UI is a dark-only, instrument-panel design system written in plain CSS (`app/globals.css`): glass surfaces with hairline borders, one cyan-to-violet accent, mono telemetry labels, status colours that glow, and motion that respects `prefers-reduced-motion`.
+- Geist and Geist Mono come from `next/font`, which downloads them when the image is built and serves them from the UI itself. Browsers fetch nothing from third parties.
+- Charts (ring gauges, column charts, distribution bars) are server-rendered SVG. Their geometry lives in pure, unit-tested `lib/charts.ts`.
+- One navigation definition (`lib/nav.ts`, unit-tested) drives the sidebar, the breadcrumbs, and a ⌘K command palette.
+- The sidebar's health indicator polls `GET /health/ready` through the same read-only proxy every 10 seconds.
+- No icon library: icons are inline SVG.
 
 **Testing.**
 - Vitest unit tests cover the read-model derivations.
@@ -80,3 +96,4 @@ It shows no prompts, checkpoint contents or tool results.
 
 - `docs/ARCHITECTURE.md` §22.
 - `README.md`: the control plane.
+- This ADR, for the visual design system.

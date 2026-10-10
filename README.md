@@ -24,6 +24,8 @@ make down              # stop and delete volumes
 
 The Makefile is the source of canonical commands. CI runs the same targets.
 
+For a step-by-step guide (first mission, approvals, learning, Temporal, real models, troubleshooting), see [`RUNNING.md`](RUNNING.md).
+
 ## Running a mission
 
 ```sh
@@ -144,6 +146,8 @@ Mission detail shows a mission from planning to evaluation:
 - results, the evaluation, and the live event stream
 
 Agent detail shows competency with uncertainty, reliability, evaluation dimensions, failure clusters, model usage and cost.
+
+**New mission** (sidebar or ⌘K) launches a mission from the UI: type an objective, pick an agent or a planner, and watch it live. Press ⌘K (Ctrl+K) anywhere to jump between pages. The sidebar shows live API, Postgres and Redis health.
 
 To decide an approval in the UI, paste your operator token into the form. It is sent once and never stored. UI checks: `make ui-install ui-check`.
 

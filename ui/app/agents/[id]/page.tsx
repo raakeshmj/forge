@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 
-import { Bar, Empty, Header, Stat } from "@/components/ui";
+import { Empty, Gauge, Header, Meter, Panel, Section, Stat } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
-import { ms, num, pct, score, usd, when } from "@/lib/format";
+import { ms, num, score, usd, when } from "@/lib/format";
 import type { AgentDetail, AgentUsage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +12,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
   let agent: AgentDetail;
   let usage: AgentUsage;
   try {
-    [agent, usage] = await Promise.all([
-      api<AgentDetail>(`/agents/${id}`),
-      api<AgentUsage>(`/agents/${id}/usage`),
-    ]);
+    [agent, usage] = await Promise.all([api<AgentDetail>(`/agents/${id}`), api<AgentUsage>(`/agents/${id}/usage`)]);
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 422)) notFound();
     throw error;
@@ -24,73 +21,100 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       <Header
+        eyebrow={`Agent · v${agent.version}`}
         title={agent.name}
         sub={
           <>
-            v{agent.version} · {agent.role} · <span className="mono">{agent.model}</span>
-            {agent.fallback_models.length ? ` (fallback ${agent.fallback_models.join(", ")})` : ""}
+            <span>{agent.role}</span>
+            <span className="tag violet">{agent.model}</span>
+            {agent.fallback_models.length ? (
+              <span className="chip">
+                fallback <b>{agent.fallback_models.join(", ")}</b>
+              </span>
+            ) : null}
           </>
         }
       />
-      <div className="stats">
-        <Stat label="Reliability" value={`${score(r.estimate)} ± ${score(r.uncertainty)}`} />
-        <Stat label="Succeeded / failed" value={`${r.successes} / ${r.failures}`} />
-        <Stat label="Executions" value={usage.executions} />
-        <Stat label="Total cost" value={usd(usage.cost_micro_usd)} />
-        <Stat label="Mean cost per execution" value={r.mean_cost_micro_usd === null ? "—" : usd(r.mean_cost_micro_usd)} />
-        <Stat label="Mean latency" value={ms(r.mean_latency_ms)} />
+
+      <div className="hero">
+        <Panel>
+          <div className="panel-title">
+            <span>Reliability and spend</span>
+          </div>
+          <div className="stats">
+            <Stat
+              label="Reliability"
+              value={`${score(r.estimate)} ± ${score(r.uncertainty)}`}
+              icon="shield"
+              tone="accent"
+            />
+            <Stat label="Succeeded / failed" value={`${r.successes} / ${r.failures}`} icon="approvals" />
+            <Stat label="Executions" value={usage.executions} icon="layers" />
+            <Stat label="Total cost" value={usd(usage.cost_micro_usd)} icon="coin" />
+            <Stat
+              label="Mean cost per execution"
+              value={r.mean_cost_micro_usd === null ? "—" : usd(r.mean_cost_micro_usd)}
+              icon="coin"
+            />
+            <Stat label="Mean latency" value={ms(r.mean_latency_ms)} icon="clock" />
+          </div>
+        </Panel>
+        <Panel>
+          <div className="panel-title">
+            <span>Estimated reliability</span>
+            <span className="mono">± uncertainty</span>
+          </div>
+          <div className="hero-gauges">
+            <Gauge
+              ratio={r.estimate}
+              label="reliability"
+              reading={score(r.estimate)}
+              caption={`± ${score(r.uncertainty)} from ${r.successes + r.failures} executions`}
+              tone="ok"
+              size={160}
+            />
+          </div>
+        </Panel>
       </div>
 
-      <h2>Competency</h2>
-      {agent.competencies.length ? (
-        <table>
-          <thead>
-            <tr>
-              <th>Capability</th>
-              <th className="num">Estimate</th>
-              <th />
-              <th className="num">Uncertainty</th>
-              <th className="num">Samples</th>
-              <th className="num">Trend</th>
-              <th className="num">Calibration</th>
-              <th>Last evaluated</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Section title="Competency" aside="per capability, measured from evaluations">
+        {agent.competencies.length ? (
+          <div className="competency-grid">
             {agent.competencies.map((c) => (
-              <tr key={c.capability}>
-                <td>{c.capability}</td>
-                <td className="num">{score(c.estimated_score)}</td>
-                <td>
-                  <Bar ratio={c.estimated_score} title={`±${c.uncertainty}`} />
-                </td>
-                <td className="num">±{score(c.uncertainty)}</td>
-                <td className="num">
-                  {c.sample_count} ({c.effective_samples.toFixed(1)} eff.)
-                </td>
-                <td className="num">{c.recent_trend === null ? "—" : c.recent_trend.toFixed(2)}</td>
-                <td className="num">{score(c.calibration)}</td>
-                <td className="mono">{when(c.last_evaluated)}</td>
-              </tr>
+              <Panel key={c.capability} className="competency">
+                <Gauge
+                  ratio={c.estimated_score}
+                  label="estimate"
+                  reading={score(c.estimated_score)}
+                  tone={c.estimated_score >= 0.8 ? "ok" : c.estimated_score >= 0.5 ? "accent" : "wait"}
+                  size={116}
+                />
+                <div className="competency-name">{c.capability}</div>
+                <div className="competency-meta">
+                  {`±${score(c.uncertainty)} uncertainty · ${c.sample_count} ${c.sample_count === 1 ? "sample" : "samples"} (${c.effective_samples.toFixed(1)} eff.)`}
+                </div>
+                <div className="competency-meta">
+                  trend {c.recent_trend === null ? "—" : c.recent_trend.toFixed(2)} · calibration {score(c.calibration)}
+                </div>
+                <div className="competency-meta mono">last {when(c.last_evaluated)}</div>
+              </Panel>
             ))}
-          </tbody>
-        </table>
-      ) : (
-        <Empty>No measured competency yet: routing relies on declared capabilities until evaluations arrive.</Empty>
-      )}
+          </div>
+        ) : (
+          <Empty>No measured competency yet: routing relies on declared capabilities until evaluations arrive.</Empty>
+        )}
+      </Section>
 
       <div className="cols">
-        <div>
-          <h2>Evaluation dimensions</h2>
+        <Section title="Evaluation dimensions">
           {usage.dimensions.length ? (
             <table>
               <tbody>
                 {usage.dimensions.map((d) => (
                   <tr key={d.dimension}>
                     <td>{d.dimension.replaceAll("_", " ")}</td>
-                    <td className="num">{score(d.mean)}</td>
                     <td>
-                      <Bar ratio={d.mean} />
+                      <Meter value={d.mean} />
                     </td>
                     <td className="num">n={d.samples}</td>
                   </tr>
@@ -100,21 +124,24 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
           ) : (
             <Empty>No scored evaluations.</Empty>
           )}
-        </div>
-        <div>
-          <h2>Failure clusters</h2>
+        </Section>
+        <Section title="Failure clusters">
           {usage.failures_by_kind.length || usage.findings.length ? (
             <table>
               <tbody>
                 {usage.failures_by_kind.map((f) => (
                   <tr key={`k-${f.key}`}>
-                    <td>execution: {f.key}</td>
+                    <td>
+                      <span className="tag violet">execution</span> {f.key}
+                    </td>
                     <td className="num">{f.count}</td>
                   </tr>
                 ))}
                 {usage.findings.map((f) => (
                   <tr key={`f-${f.key}`}>
-                    <td>finding: {f.key}</td>
+                    <td>
+                      <span className="tag cyan">finding</span> {f.key}
+                    </td>
                     <td className="num">{f.count}</td>
                   </tr>
                 ))}
@@ -123,57 +150,93 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
           ) : (
             <Empty>No failures recorded.</Empty>
           )}
-        </div>
+        </Section>
       </div>
 
-      <h2>Model usage</h2>
-      {usage.models.length ? (
-        <table>
-          <thead>
-            <tr>
-              <th>Model</th>
-              <th className="num">Calls</th>
-              <th className="num">p50 / p95</th>
-              <th className="num">Tokens in / out</th>
-              <th className="num">Cache hit</th>
-              <th className="num">Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {usage.models.map((m) => (
-              <tr key={`${m.provider}/${m.model}`}>
-                <td className="mono">
-                  {m.provider}/{m.model}
-                </td>
-                <td className="num">{num(m.calls)}</td>
-                <td className="num">
-                  {ms(m.latency_p50_ms)} / {ms(m.latency_p95_ms)}
-                </td>
-                <td className="num">
-                  {num(m.input_tokens)} / {num(m.output_tokens)}
-                </td>
-                <td className="num">{pct(m.cache_hit_rate)}</td>
-                <td className="num">{usd(m.cost_micro_usd)}</td>
+      <Section title="Model usage">
+        {usage.models.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th className="num">Calls</th>
+                <th className="num">p50 / p95</th>
+                <th className="num">Tokens in / out</th>
+                <th>Cache hit</th>
+                <th className="num">Cost</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <Empty>No model calls.</Empty>
-      )}
+            </thead>
+            <tbody>
+              {usage.models.map((m) => (
+                <tr key={`${m.provider}/${m.model}`}>
+                  <td>
+                    <span className="tag violet">
+                      {m.provider}/{m.model}
+                    </span>
+                  </td>
+                  <td className="num">{num(m.calls)}</td>
+                  <td className="num">
+                    {ms(m.latency_p50_ms)} / {ms(m.latency_p95_ms)}
+                  </td>
+                  <td className="num">
+                    {num(m.input_tokens)} / {num(m.output_tokens)}
+                  </td>
+                  <td>
+                    <Meter value={m.cache_hit_rate} tone="ok" />
+                  </td>
+                  <td className="num">{usd(m.cost_micro_usd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty>No model calls.</Empty>
+        )}
+      </Section>
 
-      <h2>Configuration</h2>
-      <div className="cols">
-        <div className="panel">
-          <div className="sub">Tools</div>
-          <div className="mono">{agent.tools.join(", ") || "—"}</div>
-          <div className="sub" style={{ marginTop: 10 }}>Capabilities</div>
-          <div>{agent.capabilities.join(", ") || "—"}</div>
-          <div className="sub" style={{ marginTop: 10 }}>Pinned skills</div>
-          <div className="mono">{agent.skills.join(", ") || "—"}</div>
+      <Section title="Configuration" aside="immutable agent version">
+        <div className="cols">
+          <Panel className="kv">
+            <div>
+              <div className="kv-label">Tools</div>
+              <div className="tags">
+                {agent.tools.length
+                  ? agent.tools.map((t) => (
+                      <span key={t} className="tag cyan">
+                        {t}
+                      </span>
+                    ))
+                  : "—"}
+              </div>
+            </div>
+            <div>
+              <div className="kv-label">Capabilities</div>
+              <div className="tags">
+                {agent.capabilities.length
+                  ? agent.capabilities.map((c) => (
+                      <span key={c} className="tag">
+                        {c}
+                      </span>
+                    ))
+                  : "—"}
+              </div>
+            </div>
+            <div>
+              <div className="kv-label">Pinned skills</div>
+              <div className="tags">
+                {agent.skills.length
+                  ? agent.skills.map((s) => (
+                      <span key={s} className="tag violet">
+                        {s}
+                      </span>
+                    ))
+                  : "—"}
+              </div>
+            </div>
+          </Panel>
+          <pre className="output">{agent.instructions}</pre>
         </div>
-        <pre className="output">{agent.instructions}</pre>
-      </div>
+      </Section>
     </>
   );
 }
